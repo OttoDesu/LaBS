@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaBS PPMKCP Login</title>
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+    <div class="split">
+        <div class="split-left">
+            <div class="card">
+                <h1>Sign In</h1>
+                <p class="subtitle">Enter your email and password to sign in!</p>
+
+                <form id="demo-login-form" novalidate>
+                    <div class="field-group">
+                        <label class="eyebrow">I am signing in as<span class="required">*</span></label>
+                        <div class="role-grid">
+                            <label class="role-card">
+                                <input type="radio" name="user_type" value="uthm" checked>
+                                <span class="role-icon">
+                                    <svg
+                                        class="h-5 w-5"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        aria-hidden="true"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
+                                        />
+                                    </svg>
+                                </span>
+                                <span class="role-title">Warga UTHM</span>
+                                <span class="role-subtitle">Staff or Student</span>
+                            </label>
+                            <label class="role-card">
+                                <input type="radio" name="user_type" value="public">
+                                <span class="role-icon">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                                        <path d="M6 20c0-3.3 2.7-6 6-6s6 2.7 6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                                    </svg>
+                                </span>
+                                <span class="role-title">Public User</span>
+                                <span class="role-subtitle">Individual account</span>
+                            </label>
+                        </div>
+                        <div class="error" id="demo-user-type-error"></div>
+                    </div>
+
+                    <div class="field-group">
+                        <div class="error" id="demo-email-error"></div>
+                        <label for="demo-email">Email<span class="required">*</span> <span class="label-muted" id="demo-email-note">(UTHM email only)</span></label>
+                        <input type="email" id="demo-email" name="email" placeholder="Enter your email" required>
+                        <p class="hint" id="demo-email-hint">Students: matricno@student.uthm.edu.my | Staff: staffname@uthm.edu.my</p>
+                    </div>
+
+                    <div class="field-group">
+                        <div class="error" id="demo-password-error"></div>
+                        <label for="demo-password">Password<span class="required">*</span></label>
+                        <div class="input-with-icon">
+                            <input type="password" id="demo-password" name="password" placeholder="Enter your password" required>
+                            <button type="button" class="toggle-visibility" data-target="demo-password" aria-label="Show password"></button>
+                        </div>
+                    </div>
+
+                    <div class="row-between">
+                        <label class="checkbox">
+                            <input type="checkbox" name="remember">
+                            <span>Keep me logged in</span>
+                        </label>
+                        <a class="link" href="#">Forgot password?</a>
+                    </div>
+
+                    <button type="submit" id="demo-login-submit" class="primary">Sign In as Warga UTHM</button>
+                </form>
+
+                <div class="helper-text">
+                    <p>Don't have an account? <a href="signup.php">Sign Up</a></p>
+                    <p class="muted" id="demo-uthm-note">UTHM staff/students: Use your institutional credentials.</p>
+                </div>
+                <div class="notice warning" id="demo-public-note">
+                    <span class="notice-icon">!</span>
+                    <span>Public users: Please sign up to create a personal account before signing in.</span>
+                </div>
+            </div>
+        </div>
+        <div class="split-right">
+            <img src="img/labs_logo.png" alt="LaBS PPMKCP" class="hero-logo">
+        </div>
+    </div>
+    <script src="assets/login-demo.js"></script>
+</body>
+</html>
