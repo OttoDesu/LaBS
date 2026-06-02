@@ -76,7 +76,7 @@ $active = 'booking';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Add Cluster</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.css') ?: time()); ?>">
 </head>
 <body data-login-url="index.php">
     <div class="app">
@@ -183,9 +183,8 @@ $active = 'booking';
         window.LABS_USER = <?php echo json_encode($user_payload); ?>;
         window.LABS_LOGIN_URL = 'index.php';
     </script>
-    <script src="assets/app.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
 </body>
 </html>
-
 
 

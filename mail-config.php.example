@@ -1,0 +1,20 @@
+<?php
+return [
+    // Supported: 'auto', 'phpmailer', 'smtp', or 'mail'
+    'transport' => 'auto',
+
+    // SMTP server settings
+    'host' => 'smtp.your-provider.com',
+    'port' => 587,
+    'encryption' => 'tls', // tls, ssl, or none
+    'username' => 'no-reply@your-domain.com',
+    'password' => 'your-app-password',
+    'timeout' => 15,
+
+    // Sender identity
+    'from_email' => 'no-reply@your-domain.com',
+    'from_name' => 'LaBS PPMKCP',
+
+    // Optional debug log
+    'debug_log' => __DIR__ . '/logs/mail.log'
+];

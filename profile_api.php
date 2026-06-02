@@ -7,7 +7,7 @@ header('Content-Type: application/json');
 $user_id = $_SESSION['user_id'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $stmt = $mysqli->prepare('SELECT name, email, ic_no, phone, department AS organization, user_type FROM users WHERE id = ? LIMIT 1');
+    $stmt = $mysqli->prepare('SELECT name, email, ic_no, phone, department AS organization, user_type, notify_email FROM users WHERE id = ? LIMIT 1');
     $stmt->bind_param('i', $user_id);
     $stmt->execute();
     $result = $stmt->get_result();
@@ -29,6 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ic_no = trim($_POST['ic_no'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $organization = trim($_POST['organization'] ?? '');
+    $notify_email = isset($_POST['notify_email']) ? 1 : 0;
     $user_type = $_SESSION['user_type'] ?? 'public';
 
     $current_ic = '';
@@ -56,15 +57,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($phone !== '' && !preg_match('/^\d{9,12}$/', $phone)) {
         $errors[] = 'Contact number must be 9 to 12 digits.';
     }
-
     if ($errors) {
         echo json_encode(['ok' => false, 'errors' => $errors]);
         exit;
     }
 
-    $stmt = $mysqli->prepare('UPDATE users SET name = ?, email = ?, ic_no = ?, phone = ?, department = ?, updated_at = NOW() WHERE id = ?');
+    $stmt = $mysqli->prepare('UPDATE users SET name = ?, email = ?, ic_no = ?, phone = ?, department = ?, notify_email = ?, updated_at = NOW() WHERE id = ?');
     $organization_value = $user_type === 'uthm_staff' ? $organization : null;
-    $stmt->bind_param('sssssi', $name, $email, $ic_no, $phone, $organization_value, $user_id);
+    $stmt->bind_param('sssssii', $name, $email, $ic_no, $phone, $organization_value, $notify_email, $user_id);
     if (!$stmt->execute()) {
         $stmt->close();
         echo json_encode(['ok' => false, 'errors' => ['Unable to update profile.']]);

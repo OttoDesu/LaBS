@@ -25,6 +25,8 @@
     var barMeta = document.getElementById('report-bar-meta');
     var tableMeta = document.getElementById('report-table-meta');
     var tableWrapper = document.getElementById('report-table-wrapper');
+    var tablePageSize = document.getElementById('report-page-size');
+    var tablePagination = document.getElementById('report-table-pagination');
     var tooltip = document.getElementById('report-tooltip');
 
     if (!form || !filterType || !yearSelect || !monthSelect || !weekSelect || !dateRangeFields || !startDateInput || !endDateInput || !clusterSelect || !labSelect || !tooltip || !selectedDaysState) {
@@ -32,6 +34,8 @@
     }
 
     var STATUS_KEYS = ['Approved', 'Cancelled', 'Rejected'];
+    var tableRows = [];
+    var tableCurrentPage = 1;
 
     function getThemeColors() {
         var styles = getComputedStyle(document.documentElement);
@@ -503,26 +507,71 @@
         }
     }
 
-    function renderTable(rows) {
-        tableMeta.textContent = rows.length + ' record(s)';
-        if (!rows.length) {
+    function getTablePageSize() {
+        if (!tablePageSize || tablePageSize.value === 'all') {
+            return tableRows.length || 1;
+        }
+        return Math.max(1, Number(tablePageSize.value) || 10);
+    }
+
+    function renderTablePagination(totalRows, pageSize, totalPages) {
+        if (!tablePagination) {
+            return;
+        }
+        if (totalRows <= pageSize || totalPages <= 1) {
+            tablePagination.hidden = true;
+            tablePagination.innerHTML = '';
+            return;
+        }
+        tablePagination.hidden = false;
+        tablePagination.innerHTML = [
+            '<button class="btn ghost small" type="button" data-report-page="prev"' + (tableCurrentPage <= 1 ? ' disabled' : '') + '>Previous</button>',
+            '<div class="pagination-status">Page ' + tableCurrentPage + ' of ' + totalPages + '</div>',
+            '<button class="btn ghost small" type="button" data-report-page="next"' + (tableCurrentPage >= totalPages ? ' disabled' : '') + '>Next</button>'
+        ].join('');
+    }
+
+    function renderTablePage() {
+        var rows = tableRows;
+        var totalRows = rows.length;
+        var pageSize = getTablePageSize();
+        var totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+        tableCurrentPage = Math.max(1, Math.min(tableCurrentPage, totalPages));
+
+        if (!totalRows) {
+            tableMeta.textContent = 'No data yet';
             tableWrapper.innerHTML = '<div class="empty-state">No bookings found for the selected filter.</div>';
+            renderTablePagination(0, pageSize, 1);
             return;
         }
 
+        var startIndex = (tableCurrentPage - 1) * pageSize;
+        var pageRows = rows.slice(startIndex, startIndex + pageSize);
+        var endIndex = startIndex + pageRows.length;
+        tableMeta.textContent = 'Showing ' + formatNumber(startIndex + 1) + '-' + formatNumber(endIndex) + ' of ' + formatNumber(totalRows) + ' record(s)';
         tableWrapper.innerHTML = '<table><thead><tr><th>#</th><th>Booking ID</th><th>Title</th><th>User</th><th>Cluster</th><th>Lab</th><th>Date</th><th>Time</th><th>Status</th><th>Hours</th></tr></thead><tbody>' +
-            rows.map(function (row, index) {
+            pageRows.map(function (row, index) {
                 var timeLabel = row.start_time && row.end_time ? (row.start_time + ' - ' + row.end_time) : (row.time_slot || '-');
                 var statusLabel = getStatusDisplayLabel(row.status);
-                return '<tr><td>' + (index + 1) + '</td><td>' + escapeHtml(row.booking_id) + '</td><td>' + escapeHtml(row.title) + '</td><td>' + escapeHtml(row.full_name) + '<div class="muted-text">User ID: ' + escapeHtml(row.user_id) + '</div></td><td>' + escapeHtml(row.cluster_name) + '</td><td>' + escapeHtml(row.lab_name) + '</td><td>' + escapeHtml(row.booking_date) + '</td><td>' + escapeHtml(timeLabel) + '</td><td><span class="status ' + escapeHtml(row.status) + '">' + escapeHtml(statusLabel) + '</span></td><td>' + escapeHtml(formatHours(row.total_hours)) + '</td></tr>';
+                return '<tr><td>' + (startIndex + index + 1) + '</td><td>' + escapeHtml(row.booking_id) + '</td><td>' + escapeHtml(row.title) + '</td><td>' + escapeHtml(row.full_name) + '<div class="muted-text">User ID: ' + escapeHtml(row.user_id) + '</div></td><td>' + escapeHtml(row.cluster_name) + '</td><td>' + escapeHtml(row.lab_name) + '</td><td>' + escapeHtml(row.booking_date) + '</td><td>' + escapeHtml(timeLabel) + '</td><td><span class="status ' + escapeHtml(row.status) + '">' + escapeHtml(statusLabel) + '</span></td><td>' + escapeHtml(formatHours(row.total_hours)) + '</td></tr>';
             }).join('') +
             '</tbody></table>';
+        renderTablePagination(totalRows, pageSize, totalPages);
+    }
+
+    function renderTable(rows) {
+        tableRows = Array.isArray(rows) ? rows : [];
+        tableCurrentPage = 1;
+        renderTablePage();
     }
 
     function loadLabs(clusterId) {
         if (!clusterId) {
-            labSelect.innerHTML = '<option value="">All labs</option>';
-            labSelect.disabled = true;
+            var initialLabs = Array.isArray(config.initialLabs) ? config.initialLabs : [];
+            labSelect.innerHTML = '<option value="">All labs</option>' + initialLabs.map(function (lab) {
+                return '<option value="' + escapeHtml(lab.lab_id) + '">' + escapeHtml(lab.lab_name) + '</option>';
+            }).join('');
+            labSelect.disabled = initialLabs.length === 0;
             return Promise.resolve();
         }
         labSelect.disabled = true;
@@ -651,6 +700,29 @@
         fetchReport();
     });
 
+    if (tablePageSize) {
+        tablePageSize.addEventListener('change', function () {
+            tableCurrentPage = 1;
+            renderTablePage();
+        });
+    }
+
+    if (tablePagination) {
+        tablePagination.addEventListener('click', function (event) {
+            var button = event.target.closest('[data-report-page]');
+            if (!button || button.disabled) {
+                return;
+            }
+            var action = button.getAttribute('data-report-page');
+            if (action === 'prev') {
+                tableCurrentPage -= 1;
+            } else if (action === 'next') {
+                tableCurrentPage += 1;
+            }
+            renderTablePage();
+        });
+    }
+
     document.querySelectorAll('.report-export').forEach(function (button) {
         button.addEventListener('click', function () {
             exportChart(button.getAttribute('data-chart-target') || '', button.getAttribute('data-export-format') || 'png');
@@ -660,7 +732,10 @@
     yearSelect.value = String(config.defaultYear || yearSelect.value);
     monthSelect.value = String(config.defaultMonth || monthSelect.value);
     endDateInput.value = endDateInput.value || startDateInput.value;
+    if (config.lockedClusterId) {
+        clusterSelect.value = String(config.lockedClusterId);
+    }
     buildWeekOptions(Number(yearSelect.value));
     updateFilterVisibility();
-    fetchReport();
+    loadLabs(clusterSelect.value).finally(fetchReport);
 })();

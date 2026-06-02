@@ -28,6 +28,18 @@ function paginate_items(array $items, $current_page, $per_page) {
     ];
 }
 
+function format_history_date($value) {
+    $value = trim((string) $value);
+    if ($value === '') {
+        return '-';
+    }
+    $timestamp = strtotime($value);
+    if ($timestamp === false) {
+        return $value;
+    }
+    return date('d M Y', $timestamp);
+}
+
 $mysqli->query('
     CREATE TABLE IF NOT EXISTS supervisors (
         supervisor_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -168,6 +180,40 @@ $labs_page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
 $labs_pagination = paginate_items($labs, $labs_page, 2);
 $labs = $labs_pagination['items'];
 
+$lab_history_map = [];
+$visible_lab_ids = array_values(array_filter(array_map(function ($lab) {
+    return (int) ($lab['lab_id'] ?? 0);
+}, $labs), function ($lab_id) {
+    return $lab_id > 0;
+}));
+if (!empty($visible_lab_ids)) {
+    $placeholders = implode(',', array_fill(0, count($visible_lab_ids), '?'));
+    $types = str_repeat('i', count($visible_lab_ids));
+    $history_stmt = $mysqli->prepare("
+        SELECT h.history_id, h.lab_id, h.previous_supervisor_id, h.supervisor_id, h.started_at, h.ended_at,
+               curr.supervisor_name AS current_supervisor_name,
+               prev.supervisor_name AS previous_supervisor_name
+        FROM lab_supervisor_history h
+        LEFT JOIN supervisors curr ON curr.supervisor_id = h.supervisor_id
+        LEFT JOIN supervisors prev ON prev.supervisor_id = h.previous_supervisor_id
+        WHERE h.lab_id IN ($placeholders)
+        ORDER BY h.lab_id ASC, h.started_at DESC, h.history_id DESC
+    ");
+    if ($history_stmt) {
+        $history_stmt->bind_param($types, ...$visible_lab_ids);
+        $history_stmt->execute();
+        $history_result = $history_stmt->get_result();
+        while ($row = $history_result->fetch_assoc()) {
+            $lab_id = (int) $row['lab_id'];
+            if (!isset($lab_history_map[$lab_id])) {
+                $lab_history_map[$lab_id] = [];
+            }
+            $lab_history_map[$lab_id][] = $row;
+        }
+        $history_stmt->close();
+    }
+}
+
 $user_payload = [
     'name' => $_SESSION['user_name'] ?? 'User',
     'email' => $_SESSION['user_email'] ?? '',
@@ -183,7 +229,7 @@ $active = 'lab-management';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Supervisor Labs</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.css') ?: time()); ?>">
 </head>
 <body data-login-url="index.php">
     <div class="app">
@@ -252,7 +298,7 @@ $active = 'lab-management';
                 <div class="content-header">
                     <div>
                         <h1>Supervisor Labs</h1>
-                        <p><?php echo htmlspecialchars($supervisor_display); ?></p>
+                        <p>View the labs assigned to this supervisor and review their assignment history.</p>
                     </div>
                     <div class="breadcrumb">Home / Lab Management / Supervisor</div>
                 </div>
@@ -270,82 +316,126 @@ $active = 'lab-management';
                         </div>
                     </div>
 
-                    <div class="card">
-                        <div class="cluster-card-header">
+                    <div class="card supervisor-hero-card">
+                        <div class="supervisor-hero-top">
                             <div>
+                                <p class="eyebrow">Supervisor profile</p>
                                 <h2><?php echo htmlspecialchars($supervisor_display); ?></h2>
                                 <p><?php echo htmlspecialchars($supervisor_email ?: 'No email provided'); ?></p>
                             </div>
                         </div>
-                        <div class="lab-meta">
-                            <div><span>Cluster:</span> <?php echo htmlspecialchars($cluster_name); ?></div>
-                            <div><span>Room:</span> <?php echo htmlspecialchars($supervisor_room ?: '-'); ?></div>
-                            <div><span>Total Labs:</span> <?php echo htmlspecialchars((string) $labs_pagination['total_items']); ?></div>
+                        <div class="supervisor-summary-grid">
+                            <div class="supervisor-summary-item">
+                                <span>Cluster</span>
+                                <strong><?php echo htmlspecialchars($cluster_name); ?></strong>
+                            </div>
+                            <div class="supervisor-summary-item">
+                                <span>Room</span>
+                                <strong><?php echo htmlspecialchars($supervisor_room ?: '-'); ?></strong>
+                            </div>
+                            <div class="supervisor-summary-item">
+                                <span>Total Labs</span>
+                                <strong><?php echo htmlspecialchars((string) $labs_pagination['total_items']); ?></strong>
+                            </div>
+                        </div>
+                        <div class="supervisor-profile-labs">
+                            <div class="section-header supervisor-labs-header">
+                                <div>
+                                    <h2>Assigned Labs</h2>
+                                </div>
+                            </div>
+                            <?php if (empty($labs)): ?>
+                                <div class="empty-state">No labs found for this supervisor.</div>
+                            <?php else: ?>
+                                <div class="lab-grid lab-grid-embedded">
+                                    <?php foreach ($labs as $index => $lab): ?>
+                                        <div class="lab-card">
+                                            <div class="lab-card-top">
+                                                <div>
+                                                    <p class="muted-text">Lab <?php echo (int) ((($labs_pagination['current_page'] - 1) * $labs_pagination['per_page']) + $index + 1); ?></p>
+                                                    <h3><?php echo htmlspecialchars($lab['lab_name']); ?></h3>
+                                                    <p><?php echo htmlspecialchars($lab['cluster_name'] ?? $cluster_name); ?></p>
+                                                </div>
+                                                <div class="lab-card-status">
+                                                    <?php if (($lab['maintenance_status'] ?? 'available') === 'maintenance'): ?>
+                                                        <span class="badge">Under maintenance</span>
+                                                    <?php else: ?>
+                                                        <span class="badge badge-success">Available</span>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                            <div class="lab-card-body">
+                                                <div class="lab-meta">
+                                                    <div><span>Capacity:</span> <?php echo htmlspecialchars((string) $lab['lab_capacity']); ?></div>
+                                                    <div><span>Status:</span> <?php echo htmlspecialchars(($lab['maintenance_status'] ?? 'available') === 'maintenance' ? 'Under maintenance' : 'Available'); ?></div>
+                                                </div>
+                                                <?php if (($lab['maintenance_status'] ?? 'available') === 'maintenance'): ?>
+                                                    <div class="lab-maintenance-note">
+                                                        <?php echo htmlspecialchars(get_lab_maintenance_period_label($lab['maintenance_start_date'] ?? null, $lab['maintenance_end_date'] ?? null)); ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                            <p class="lab-card-description"><?php echo htmlspecialchars($lab['lab_description'] ?: 'Maklumat terperinci belum disediakan.'); ?></p>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
 
-                    <?php if (empty($labs)): ?>
-                        <div class="card">
-                            <p class="muted-text">No labs found for this supervisor.</p>
+                    <div class="card history-section-card">
+                        <div class="section-header">
+                            <div>
+                                <h2>Lab History</h2>
+                            </div>
                         </div>
-                    <?php else: ?>
-                        <div class="lab-grid">
+                        <div class="lab-history-grid">
                             <?php foreach ($labs as $index => $lab): ?>
-                                <div class="lab-card">
-                                    <div class="cluster-card-header">
+                                <?php $history_rows = $lab_history_map[(int) $lab['lab_id']] ?? []; ?>
+                                <div class="lab-history-card">
+                                    <div class="lab-history-header">
                                         <div>
                                             <p class="muted-text">Lab <?php echo (int) ((($labs_pagination['current_page'] - 1) * $labs_pagination['per_page']) + $index + 1); ?></p>
                                             <h3><?php echo htmlspecialchars($lab['lab_name']); ?></h3>
-                                            <p><?php echo htmlspecialchars($lab['cluster_name'] ?? $cluster_name); ?></p>
                                         </div>
-                                        <?php if ($can_edit_labs): ?>
-                                            <div class="card-actions">
-                                                <button
-                                                    class="btn ghost small edit-lab"
-                                                    type="button"
-                                                    data-lab-id="<?php echo (int) $lab['lab_id']; ?>"
-                                                    data-lab-name="<?php echo htmlspecialchars($lab['lab_name']); ?>"
-                                                    data-lab-capacity="<?php echo htmlspecialchars((string) $lab['lab_capacity']); ?>"
-                                                    data-lab-description="<?php echo htmlspecialchars($lab['lab_description']); ?>"
-                                                    data-maintenance-status="<?php echo htmlspecialchars($lab['maintenance_status'] ?? 'available'); ?>"
-                                                    data-maintenance-start="<?php echo htmlspecialchars((string) ($lab['maintenance_start_date'] ?? '')); ?>"
-                                                    data-maintenance-end="<?php echo htmlspecialchars((string) ($lab['maintenance_end_date'] ?? '')); ?>"
-                                                >
-                                                    Edit
-                                                </button>
-                                            </div>
+                                        <span class="badge badge-secondary"><?php echo count($history_rows) > 0 ? count($history_rows) . ' record' . (count($history_rows) === 1 ? '' : 's') : 'No history'; ?></span>
+                                    </div>
+                                    <div class="lab-history-list">
+                                        <?php if (empty($history_rows)): ?>
+                                            <div class="lab-history-empty">No history yet for this lab.</div>
+                                        <?php else: ?>
+                                            <?php foreach ($history_rows as $history): ?>
+                                                <?php $is_current = empty($history['ended_at']); ?>
+                                                <div class="lab-history-item<?php echo $is_current ? ' is-current' : ''; ?>">
+                                                    <div class="lab-history-item-header">
+                                                        <strong><?php echo htmlspecialchars($history['current_supervisor_name'] ?: 'Unassigned'); ?></strong>
+                                                        <span class="badge <?php echo $is_current ? 'badge-success' : 'badge-secondary'; ?>">
+                                                            <?php echo $is_current ? 'Current' : 'Previous'; ?>
+                                                        </span>
+                                                    </div>
+                                                    <div class="lab-history-meta">
+                                                        <div><span>Previous supervisor:</span> <?php echo htmlspecialchars($history['previous_supervisor_name'] ?: '-'); ?></div>
+                                                        <div><span>From:</span> <?php echo htmlspecialchars(format_history_date($history['started_at'] ?? null)); ?></div>
+                                                        <div><span>To:</span> <?php echo $is_current ? 'Current' : htmlspecialchars(format_history_date($history['ended_at'] ?? null)); ?></div>
+                                                    </div>
+                                                </div>
+                                            <?php endforeach; ?>
                                         <?php endif; ?>
                                     </div>
-                                    <div class="lab-meta">
-                                        <div><span>Supervisor:</span> <?php echo htmlspecialchars($lab['supervisor_name'] ?? $supervisor_display); ?></div>
-                                        <div><span>Email:</span> <?php echo htmlspecialchars($lab['supervisor_email'] ?? $supervisor_email ?: '-'); ?></div>
-                                        <div><span>Room:</span> <?php echo htmlspecialchars($lab['supervisor_room_no'] ?: '-'); ?></div>
-                                        <div><span>Capacity:</span> <?php echo htmlspecialchars((string) $lab['lab_capacity']); ?></div>
-                                        <div>
-                                            <span>Status:</span>
-                                            <?php if (($lab['maintenance_status'] ?? 'available') === 'maintenance'): ?>
-                                                <span class="badge">Under maintenance</span>
-                                                <div class="muted-text"><?php echo htmlspecialchars(get_lab_maintenance_period_label($lab['maintenance_start_date'] ?? null, $lab['maintenance_end_date'] ?? null)); ?></div>
-                                            <?php else: ?>
-                                                <span class="muted-text">Available</span>
-                                            <?php endif; ?>
-                                        </div>
-                                    </div>
-                                    <p class="muted-text"><?php echo htmlspecialchars($lab['lab_description'] ?: 'Maklumat terperinci belum disediakan.'); ?></p>
                                 </div>
                             <?php endforeach; ?>
                         </div>
-                        <?php if ($labs_pagination['total_pages'] > 1): ?>
-                            <div class="pagination">
-                                <?php
-                                $prev_page = max(1, $labs_pagination['current_page'] - 1);
-                                $next_page = min($labs_pagination['total_pages'], $labs_pagination['current_page'] + 1);
-                                ?>
-                                <a class="btn ghost small<?php echo $labs_pagination['current_page'] <= 1 ? ' is-disabled' : ''; ?>" href="lab-management-supervisor.php?cluster=<?php echo (int) $cluster_id; ?>&supervisor=<?php echo urlencode($supervisor_param); ?>&page=<?php echo (int) $prev_page; ?>">Previous</a>
-                                <div class="pagination-status">Page <?php echo (int) $labs_pagination['current_page']; ?> of <?php echo (int) $labs_pagination['total_pages']; ?></div>
-                                <a class="btn ghost small<?php echo $labs_pagination['current_page'] >= $labs_pagination['total_pages'] ? ' is-disabled' : ''; ?>" href="lab-management-supervisor.php?cluster=<?php echo (int) $cluster_id; ?>&supervisor=<?php echo urlencode($supervisor_param); ?>&page=<?php echo (int) $next_page; ?>">Next</a>
-                            </div>
-                        <?php endif; ?>
+                    </div>
+                    <?php if ($labs_pagination['total_pages'] > 1): ?>
+                        <div class="pagination">
+                            <?php
+                            $prev_page = max(1, $labs_pagination['current_page'] - 1);
+                            $next_page = min($labs_pagination['total_pages'], $labs_pagination['current_page'] + 1);
+                            ?>
+                            <a class="btn ghost small<?php echo $labs_pagination['current_page'] <= 1 ? ' is-disabled' : ''; ?>" href="lab-management-supervisor.php?cluster=<?php echo (int) $cluster_id; ?>&supervisor=<?php echo urlencode($supervisor_param); ?>&page=<?php echo (int) $prev_page; ?>">Previous</a>
+                            <div class="pagination-status">Page <?php echo (int) $labs_pagination['current_page']; ?> of <?php echo (int) $labs_pagination['total_pages']; ?></div>
+                            <a class="btn ghost small<?php echo $labs_pagination['current_page'] >= $labs_pagination['total_pages'] ? ' is-disabled' : ''; ?>" href="lab-management-supervisor.php?cluster=<?php echo (int) $cluster_id; ?>&supervisor=<?php echo urlencode($supervisor_param); ?>&page=<?php echo (int) $next_page; ?>">Next</a>
+                        </div>
                     <?php endif; ?>
                 </div>
 
@@ -410,7 +500,7 @@ $active = 'lab-management';
         window.LABS_USER = <?php echo json_encode($user_payload); ?>;
         window.LABS_LOGIN_URL = 'index.php';
     </script>
-    <script src="assets/app.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
     <?php if ($can_edit_labs): ?>
     <script>
         (function () {

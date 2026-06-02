@@ -146,7 +146,7 @@ $flash_signup = get_flash('signup_success');
                         <input type="checkbox" name="remember">
                         <span>Keep me logged in</span>
                     </label>
-                    <a class="link" href="#">Forgot password?</a>
+                    <a class="link" href="forgot-password.php">Forgot password?</a>
                 </div>
 
                 <button type="submit" id="signin-submit" class="primary">Sign In</button>

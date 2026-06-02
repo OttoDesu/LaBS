@@ -218,6 +218,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new RuntimeException('Selected vacant labs are no longer available. Please refresh and try again.');
                     }
                     $stmt->close();
+                    foreach ($vacant_lab_ids as $lab_id) {
+                        sync_lab_supervisor_history($mysqli, $lab_id, $supervisor_id);
+                    }
                 }
 
                 if (!empty($recommended_lab_ids)) {
@@ -236,6 +239,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         throw new RuntimeException('Selected DSS recommendation labs could not be reassigned. Please refresh and try again.');
                     }
                     $stmt->close();
+                    foreach ($recommended_lab_ids as $lab_id) {
+                        sync_lab_supervisor_history($mysqli, $lab_id, $supervisor_id);
+                    }
                 }
             }
 
@@ -332,6 +338,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->bind_param($types, ...$params);
                 $stmt->execute();
                 $stmt->close();
+                foreach ($to_unassign as $lab_id) {
+                    sync_lab_supervisor_history($mysqli, $lab_id, null);
+                }
             }
 
             if (!empty($selected_ids)) {
@@ -346,6 +355,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->bind_param($types, ...$params);
                 $stmt->execute();
                 $stmt->close();
+                foreach ($selected_ids as $lab_id) {
+                    sync_lab_supervisor_history($mysqli, $lab_id, $supervisor_id);
+                }
             }
 
             $mysqli->commit();
@@ -372,6 +384,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect_to_cluster($cluster_id);
         }
 
+        $lab_ids_to_clear = fetch_supervisor_lab_ids($mysqli, $cluster_id, $supervisor_id);
+
         $stmt = $mysqli->prepare('
             UPDATE labs
             SET supervisor_id = NULL
@@ -380,6 +394,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param('ii', $cluster_id, $supervisor_id);
         $stmt->execute();
         $stmt->close();
+
+        foreach ($lab_ids_to_clear as $lab_id) {
+            sync_lab_supervisor_history($mysqli, $lab_id, null);
+        }
 
         $stmt = $mysqli->prepare('DELETE FROM supervisors WHERE supervisor_id = ? AND cluster_id = ?');
         $stmt->bind_param('ii', $supervisor_id, $cluster_id);
@@ -450,6 +468,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         );
         $stmt->execute();
         $stmt->close();
+
+        $lab_id = (int) $mysqli->insert_id;
+        if ($lab_id > 0 && $supervisor_id_value !== null) {
+            sync_lab_supervisor_history($mysqli, $lab_id, $supervisor_id_value);
+        }
 
         set_flash('success', 'Lab added.');
         redirect_to_cluster($cluster_id);
@@ -572,6 +595,7 @@ usort($supervisors, function ($a, $b) {
     return strcasecmp($a['name'], $b['name']);
 });
 
+$total_labs_in_cluster = count($labs_all);
 $all_supervisors = $supervisors;
 $supervisor_page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
 $supervisor_pagination = paginate_items($supervisors, $supervisor_page, 6);
@@ -674,7 +698,10 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                     <div class="card">
                         <div class="banner">
                             <div>
-                                <h2><?php echo htmlspecialchars($cluster_name); ?></h2>
+                                <h2 class="cluster-title-inline">
+                                    <span><?php echo htmlspecialchars($cluster_name); ?></span>
+                                    <span class="badge">Total labs: <?php echo (int) $total_labs_in_cluster; ?></span>
+                                </h2>
                                 <p><?php echo htmlspecialchars($cluster_description); ?></p>
                             </div>
                         <div class="banner-links">
@@ -719,7 +746,7 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                                                 <?php echo htmlspecialchars((string) $lab_count); ?> Lab<?php echo $lab_count === 1 ? '' : 's'; ?>
                                             </span>
                                             <?php if ($can_manage_cluster && !$is_unassigned): ?>
-                                                <button class="btn ghost small" type="button" data-action="edit-supervisor" data-supervisor-id="<?php echo (int) $supervisor['id']; ?>">Edit</button>
+                                                <button class="btn primary small" type="button" data-action="edit-supervisor" data-supervisor-id="<?php echo (int) $supervisor['id']; ?>">Edit</button>
                                             <?php endif; ?>
                                         </div>
                                     </div>
@@ -862,14 +889,12 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                         <label for="edit-supervisor-room">Supervisor Room</label>
                         <input id="edit-supervisor-room" name="supervisor_room_no" type="text">
                     </div>
-                    <div class="modal-section">
-                        <div class="section-title">DSS Recommendation</div>
-                        <p class="muted-text">Use these supervisors first when temporarily switching or reassigning labs.</p>
+                    <div class="modal-section"></br>
+                        <div class="section-title">Use the recommended supervisors first when temporarily switching or reassigning labs.</div>
                         <div class="lab-select-list dss-recommendation-list" id="edit-supervisor-dss-list"></div>
                     </div>
-                    <div class="modal-section">
-                        <div class="section-title">Assign Labs</div>
-                        <p class="muted-text">Vacant labs can be assigned directly. Occupied labs require explicit replacement.</p>
+                    <div class="modal-section"></br>
+                        <div class="section-title">Vacant labs can be assigned directly. Occupied labs require explicit replacement.</div>
                         <div class="alert alert-error" id="manage-labs-error" hidden></div>
                         <div class="lab-select-list" id="manage-labs-list"></div>
                     </div>
@@ -880,6 +905,23 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                     <button class="btn primary" type="submit" name="action" value="update_supervisor_labs">Save</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <div class="modal" id="supervisor-labs-modal">
+        <div class="modal-content modal-content-wide">
+            <div class="modal-header">
+                <h2 id="supervisor-labs-modal-title">Supervisor Labs</h2>
+                <button class="icon-button" type="button" data-close="supervisor-labs-modal" aria-label="Close">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p class="muted-text" id="supervisor-labs-modal-subtitle"></p>
+                <div class="lab-select-list supervisor-labs-modal-list" id="supervisor-labs-modal-list"></div>
+            </div>
         </div>
     </div>
 
@@ -1002,6 +1044,9 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
             var editSupervisorDssList = document.getElementById('edit-supervisor-dss-list');
             var manageLabsList = document.getElementById('manage-labs-list');
             var manageLabsError = document.getElementById('manage-labs-error');
+            var supervisorLabsModalTitle = document.getElementById('supervisor-labs-modal-title');
+            var supervisorLabsModalSubtitle = document.getElementById('supervisor-labs-modal-subtitle');
+            var supervisorLabsModalList = document.getElementById('supervisor-labs-modal-list');
             var editMaintenanceStart = document.getElementById('edit-maintenance-start');
             var editMaintenanceEnd = document.getElementById('edit-maintenance-end');
 
@@ -1137,6 +1182,36 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                 wireDssList(container);
             }
 
+            function renderSupervisorLabsModal(supervisor) {
+                if (!supervisorLabsModalTitle || !supervisorLabsModalSubtitle || !supervisorLabsModalList) {
+                    return;
+                }
+
+                var labList = supervisor && supervisor.labs ? supervisor.labs : [];
+                var labCount = labList.length;
+                supervisorLabsModalTitle.textContent = supervisor ? supervisor.name + ' Labs' : 'Supervisor Labs';
+                supervisorLabsModalSubtitle.textContent = supervisor
+                    ? (supervisor.email || 'No email provided') + ' · ' + labCount + ' lab' + (labCount === 1 ? '' : 's')
+                    : '';
+
+                if (labCount === 0) {
+                    supervisorLabsModalList.innerHTML = '<div class="lab-select-item dss-recommendation-empty"><span class="lab-select-details"><strong>No labs assigned</strong><span>This supervisor is currently not managing any labs.</span></span></div>';
+                } else {
+                    supervisorLabsModalList.innerHTML = labList.map(function (lab) {
+                        return [
+                            '<div class="lab-select-item supervisor-lab-info-item">',
+                            '  <span class="lab-select-details">',
+                            '    <strong>' + lab.name + '</strong>',
+                            '    <span>Lab ID: ' + lab.id + '</span>',
+                            '  </span>',
+                            '  <span class="badge badge-secondary">Assigned</span>',
+                            '</div>'
+                        ].join('');
+                    }).join('');
+                }
+                openModal('supervisor-labs-modal');
+            }
+
             function countAddSupervisorSelectedLabs() {
                 if (!addSupervisorForm) {
                     return 0;
@@ -1248,7 +1323,30 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                         meta.textContent = 'Assigned to this supervisor';
                     } else if (occupiedByOther) {
                         item.classList.add('is-occupied');
-                        meta.textContent = 'Currently assigned to ' + (lab.supervisor_name || 'another supervisor');
+                        var currentWrapper = document.createElement('span');
+                        currentWrapper.className = 'lab-select-occupied-row';
+
+                        var currentText = document.createElement('span');
+                        currentText.innerHTML = 'Currently assigned to <span class="lab-select-assignee">' + (lab.supervisor_name || 'another supervisor') + '</span>';
+
+                        var infoButton = document.createElement('button');
+                        infoButton.type = 'button';
+                        infoButton.className = 'dss-info lab-sv-info';
+                        infoButton.setAttribute('aria-label', 'View supervisor labs');
+                        infoButton.textContent = 'i';
+                        infoButton.addEventListener('click', function (event) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            var supervisorId = Number(lab.supervisor_id || 0);
+                            var supervisorInfo = supervisors.find(function (candidate) {
+                                return Number(candidate.id || 0) === supervisorId;
+                            });
+                            renderSupervisorLabsModal(supervisorInfo);
+                        });
+
+                        currentWrapper.appendChild(currentText);
+                        currentWrapper.appendChild(infoButton);
+                        meta.appendChild(currentWrapper);
                     } else {
                         item.classList.add('is-available');
                         meta.textContent = 'Vacant';

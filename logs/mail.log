@@ -1,0 +1,5 @@
+[2026-05-30 05:36:35] mail() failed: LaBS Password Reset Code -> ci230027@student.uthm.edu.my
+[2026-05-30 05:52:35] mail() failed: LaBS Password Reset Code -> ci230027@student.uthm.edu.my
+[2026-06-01 20:07:24] PHPMailer sent: LaBS Password Reset Code -> ci230027@student.uthm.edu.my
+[2026-06-01 20:42:35] PHPMailer sent: Booking cancelled for your lab -> mim.haura@gmail.com
+[2026-06-01 20:42:39] PHPMailer sent: Booking cancelled for your lab -> ksgt@uthm.edu.my

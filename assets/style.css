@@ -367,6 +367,17 @@ input:focus {
     border: 1px solid #c8d8ff;
 }
 
+.note.notice-warning {
+    background: #fff4e0;
+    border-color: #f4c27a;
+    color: #b25a1c;
+}
+
+.note.notice-warning .note-icon {
+    background: #ffe5bf;
+    color: #b25a1c;
+}
+
 .note-icon {
     width: 22px;
     height: 22px;
@@ -521,4 +532,3 @@ input:focus {
         min-height: 260px;
     }
 }
-

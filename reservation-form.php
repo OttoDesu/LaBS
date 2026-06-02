@@ -5,8 +5,10 @@ require_login();
 $user_id = (int) ($_SESSION['user_id'] ?? 0);
 $user_type = $_SESSION['user_type'] ?? 'public';
 $is_admin = is_admin_user($user_type);
+$is_lab_supervisor = is_lab_supervisor($user_type);
 
 $time_slots = [
+    '08:00-09:00',
     '09:00-10:00',
     '10:00-11:00',
     '11:00-12:00',
@@ -14,11 +16,174 @@ $time_slots = [
     '13:00-14:00',
     '14:00-15:00',
     '15:00-16:00',
-    '16:00-17:00'
+    '16:00-17:00',
+    '17:00-18:00',
+    '18:00-19:00',
+    '19:00-20:00',
+    '20:00-21:00',
+    '21:00-22:00',
+    '22:00-23:00'
 ];
+
+function labs_time_to_minutes(string $time): ?int {
+    if (!preg_match('/^(\d{2}):(\d{2})$/', $time, $matches)) {
+        return null;
+    }
+    $hours = (int) $matches[1];
+    $minutes = (int) $matches[2];
+    if ($hours < 0 || $hours > 23 || $minutes < 0 || $minutes > 59) {
+        return null;
+    }
+    return ($hours * 60) + $minutes;
+}
+
+function labs_minutes_to_time_label(int $minutes): string {
+    $minutes = max(0, min(23 * 60 + 59, $minutes));
+    $hours = (int) floor($minutes / 60);
+    $mins = $minutes % 60;
+    return sprintf('%02d:%02d', $hours, $mins);
+}
+
+function labs_weekday_to_index(string $weekday): ?int {
+    static $map = [
+        'Sunday' => 0,
+        'Monday' => 1,
+        'Tuesday' => 2,
+        'Wednesday' => 3,
+        'Thursday' => 4,
+        'Friday' => 5,
+        'Saturday' => 6
+    ];
+    return $map[$weekday] ?? null;
+}
+
+function labs_first_occurrence_date(string $reference_date, string $weekday): ?DateTime {
+    $reference = DateTime::createFromFormat('Y-m-d', $reference_date);
+    $target_index = labs_weekday_to_index($weekday);
+    if (!$reference || $target_index === null) {
+        return null;
+    }
+    $current_index = (int) $reference->format('w');
+    $days_ahead = ($target_index - $current_index + 7) % 7;
+    if ($days_ahead > 0) {
+        $reference->modify('+' . $days_ahead . ' days');
+    }
+    return $reference;
+}
+
+function labs_date_within_range(string $date, ?string $start_date, ?string $end_date): bool {
+    if (!$start_date || !$end_date) {
+        return false;
+    }
+    return $date >= $start_date && $date <= $end_date;
+}
+
+function labs_generate_hour_slots(string $start_time, string $end_time): array {
+    $start_minutes = labs_time_to_minutes($start_time);
+    $end_minutes = labs_time_to_minutes($end_time);
+    if ($start_minutes === null || $end_minutes === null || $end_minutes <= $start_minutes) {
+        return [];
+    }
+    $slots = [];
+    for ($cursor = $start_minutes; $cursor < $end_minutes; $cursor += 60) {
+        $next = $cursor + 60;
+        if ($next > $end_minutes) {
+            break;
+        }
+        $slots[] = labs_minutes_to_time_label($cursor) . '-' . labs_minutes_to_time_label($next);
+    }
+    return $slots;
+}
+
+function labs_generate_group_booking_key(): string {
+    try {
+        return 'grp_' . bin2hex(random_bytes(16));
+    } catch (Throwable $throwable) {
+        return 'grp_' . uniqid('', true);
+    }
+}
+
+function add_form_field_error(array &$field_errors, string $field, string $message): void {
+    if (!isset($field_errors[$field])) {
+        $field_errors[$field] = [];
+    }
+    $field_errors[$field][] = $message;
+}
+
+function sync_user_profile_from_booking_form($mysqli, int $user_id, string $full_name, string $email, string $phone, ?string $ic_no = null, ?string $student_staff_id = null): void {
+    if (!$mysqli || $user_id <= 0) {
+        return;
+    }
+
+    $full_name = trim($full_name);
+    $email = trim($email);
+    $phone = trim($phone);
+    $ic_no = $ic_no !== null ? trim($ic_no) : null;
+    $student_staff_id = $student_staff_id !== null ? trim($student_staff_id) : null;
+
+    $stmt = $mysqli->prepare('
+        UPDATE users
+        SET name = ?, email = ?, phone = ?, ic_no = ?, student_staff_id = ?, updated_at = NOW()
+        WHERE id = ?
+    ');
+    if (!$stmt) {
+        return;
+    }
+
+    $stmt->bind_param('sssssi', $full_name, $email, $phone, $ic_no, $student_staff_id, $user_id);
+    $stmt->execute();
+    $stmt->close();
+}
+
+function build_booking_notification_message(
+    string $lab_name,
+    string $title,
+    string $description,
+    ?string $booking_date,
+    array $selected_time_slots,
+    ?string $actor_name = null,
+    ?string $contact_email = null,
+    ?string $contact_phone = null,
+    ?string $identity_value = null
+): string {
+    $lines = [];
+    if ($actor_name !== null && trim($actor_name) !== '') {
+        $lines[] = 'Requested by: ' . trim($actor_name);
+    }
+    if ($identity_value !== null && trim($identity_value) !== '') {
+        $lines[] = 'ID/IC: ' . trim($identity_value);
+    }
+    if ($contact_email !== null && trim($contact_email) !== '') {
+        $lines[] = 'Email: ' . trim($contact_email);
+    }
+    if ($contact_phone !== null && trim($contact_phone) !== '') {
+        $lines[] = 'Phone: ' . trim($contact_phone);
+    }
+    $lines[] = 'Lab: ' . $lab_name;
+    if (trim($booking_date ?? '') !== '') {
+        $lines[] = 'Date: ' . trim((string) $booking_date);
+    }
+    if (!empty($selected_time_slots)) {
+        $lines[] = 'Time: ' . implode(', ', $selected_time_slots);
+    }
+    if (trim($title) !== '') {
+        $lines[] = 'Title: ' . trim($title);
+    }
+    if (trim($description) !== '') {
+        $lines[] = 'Description: ' . preg_replace('/\s+/', ' ', trim($description));
+    }
+    return implode("\n", $lines);
+}
 
 $lab_id = (int) ($_GET['lab_id'] ?? $_POST['lab_id'] ?? 0);
 $booking_date = $_GET['booking_date'] ?? $_POST['booking_date'] ?? '';
+$booking_mode = $_GET['booking_mode'] ?? $_POST['booking_mode'] ?? 'slot';
+$booking_mode = $is_lab_supervisor && $booking_mode === 'group' ? 'group' : 'slot';
+$edit_group_reservation_id = (int) ($_GET['edit_group_reservation_id'] ?? $_POST['edit_group_reservation_id'] ?? 0);
+$is_edit_group_booking = false;
+$editing_group_booking_key = null;
+$editing_group_booking_ids = [];
+$editing_group_reservation_ids = [];
 
 // Handle both single time_slot (from GET, old format) and multiple time_slots (from POST, new format)
 $selected_time_slots = [];
@@ -89,7 +254,9 @@ if (!$lab) {
     exit;
 }
 
-if (is_lab_under_maintenance($lab, $booking_date)) {
+$group_reference_date = $booking_date ?: (new DateTime('today'))->format('Y-m-d');
+
+if ($booking_mode !== 'group' && is_lab_under_maintenance($lab, $booking_date)) {
     set_flash('info', 'This lab is under maintenance on the selected date and cannot be booked.');
     header('Location: availability.php?lab_id=' . (int) $lab_id);
     exit;
@@ -121,15 +288,118 @@ while ($row = $result->fetch_assoc()) {
 $stmt->close();
 
 $errors = [];
+$field_errors = [];
 $booking_pk = get_booking_pk_column($mysqli);
+$edit_group_booking_source = null;
+$delete_group_booking_requested = $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_group_booking']);
+
+if ($is_lab_supervisor && $edit_group_reservation_id > 0) {
+    $stmt = $mysqli->prepare('
+        SELECT lr.*, lb.' . $booking_pk . ' AS booking_id_value, lb.lab_id AS booking_lab_id, lb.user_id AS booking_user_id
+        FROM lab_reservations lr
+        JOIN lab_bookings lb ON lr.booking_id = lb.' . $booking_pk . '
+        WHERE lr.reservation_id = ?
+          AND lr.booking_mode = "group"
+          AND lb.user_id = ?
+          AND lb.lab_id = ?
+        LIMIT 1
+    ');
+    if ($stmt) {
+        $stmt->bind_param('iii', $edit_group_reservation_id, $user_id, $lab_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $edit_group_booking_source = $result->fetch_assoc() ?: null;
+        $stmt->close();
+    }
+
+    if ($edit_group_booking_source) {
+        $editing_group_booking_key = trim((string) ($edit_group_booking_source['group_booking_key'] ?? ''));
+        if ($editing_group_booking_key === '') {
+            $editing_group_booking_key = labs_generate_group_booking_key();
+            $legacy_stmt = $mysqli->prepare('
+                UPDATE lab_reservations lr
+                JOIN lab_bookings lb ON lr.booking_id = lb.' . $booking_pk . '
+                SET lr.group_booking_key = ?
+                WHERE lb.user_id = ?
+                  AND lb.lab_id = ?
+                  AND lr.booking_mode = "group"
+                  AND COALESCE(lr.class_course_code, "") = COALESCE(?, "")
+                  AND COALESCE(lr.class_subject_name, "") = COALESCE(?, "")
+                  AND COALESCE(lr.class_section, "") = COALESCE(?, "")
+                  AND COALESCE(lr.group_reference_date, "0000-00-00") = COALESCE(?, "0000-00-00")
+                  AND COALESCE(lr.group_weeks_count, 0) = COALESCE(?, 0)
+                  AND COALESCE(lr.group_sessions_json, "") = COALESCE(?, "")
+            ');
+            if ($legacy_stmt) {
+                $legacy_stmt->bind_param(
+                    'siissssis',
+                    $editing_group_booking_key,
+                    $user_id,
+                    $lab_id,
+                    $edit_group_booking_source['class_course_code'],
+                    $edit_group_booking_source['class_subject_name'],
+                    $edit_group_booking_source['class_section'],
+                    $edit_group_booking_source['group_reference_date'],
+                    $edit_group_booking_source['group_weeks_count'],
+                    $edit_group_booking_source['group_sessions_json']
+                );
+                $legacy_stmt->execute();
+                $legacy_stmt->close();
+            }
+        }
+
+        $series_stmt = $mysqli->prepare('
+            SELECT lr.reservation_id, lr.booking_id
+            FROM lab_reservations lr
+            JOIN lab_bookings lb ON lr.booking_id = lb.' . $booking_pk . '
+            WHERE lr.group_booking_key = ?
+              AND lr.booking_mode = "group"
+              AND lb.user_id = ?
+              AND lb.lab_id = ?
+            ORDER BY lb.booking_date ASC, lb.time_slot ASC
+        ');
+        if ($series_stmt) {
+            $series_stmt->bind_param('sii', $editing_group_booking_key, $user_id, $lab_id);
+            $series_stmt->execute();
+            $result = $series_stmt->get_result();
+            while ($row = $result->fetch_assoc()) {
+                $editing_group_booking_ids[] = (int) $row['booking_id'];
+                $editing_group_reservation_ids[] = (int) $row['reservation_id'];
+            }
+            $series_stmt->close();
+        }
+
+        $is_edit_group_booking = !empty($editing_group_booking_ids) && !empty($editing_group_reservation_ids);
+    }
+}
+
+$group_initial_sessions = [];
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $posted_types = $_POST['group_session_type'] ?? [];
+    $posted_days = $_POST['group_day_of_week'] ?? [];
+    $posted_start_times = $_POST['group_start_time'] ?? [];
+    $posted_end_times = $_POST['group_end_time'] ?? [];
+    $group_session_count = max(count($posted_types), count($posted_days), count($posted_start_times), count($posted_end_times));
+    for ($session_index = 0; $session_index < $group_session_count; $session_index++) {
+        $group_initial_sessions[] = [
+            'booking_type' => trim((string) ($posted_types[$session_index] ?? 'lecture')),
+            'day_of_week' => trim((string) ($posted_days[$session_index] ?? 'Monday')),
+            'start_time' => trim((string) ($posted_start_times[$session_index] ?? '09:00')),
+            'end_time' => trim((string) ($posted_end_times[$session_index] ?? '10:00'))
+        ];
+    }
+}
 $form_values = [
-    'booking_purpose' => $_POST['booking_purpose'] ?? 'lab',
+    'booking_mode' => ($is_lab_supervisor && (($_POST['booking_mode'] ?? $_GET['booking_mode'] ?? 'slot') === 'group')) ? 'group' : 'slot',
     'title' => $_POST['title'] ?? '',
     'activity_details' => $_POST['activity_details'] ?? '',
     'course_code' => $_POST['course_code'] ?? '',
     'class_title' => $_POST['class_title'] ?? '',
     'class_group' => $_POST['class_group'] ?? '',
-    'class_notes' => $_POST['class_notes'] ?? '',
+    'class_pic' => $_POST['class_pic'] ?? '',
+    'group_weeks_count' => $_POST['group_weeks_count'] ?? '1',
+    'group_week_one_start_date' => $_POST['group_week_one_start_date'] ?? $group_reference_date,
+    'group_midsem_start_date' => $_POST['group_midsem_start_date'] ?? '',
     'full_name' => $_POST['full_name'] ?? $user['name'],
     'ic_no' => $_POST['ic_no'] ?? $user['ic_no'],
     'email' => $_POST['email'] ?? $user['email'],
@@ -148,6 +418,57 @@ $form_values = [
     'supervisor_email' => $_POST['supervisor_email'] ?? ''
 ];
 
+if ($is_edit_group_booking && $edit_group_booking_source && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+    $booking_date = (string) ($edit_group_booking_source['group_reference_date'] ?? $booking_date);
+    $selected_time_slots = [];
+    $start_time = '';
+    $end_time = '';
+    $form_values = [
+        'booking_mode' => 'group',
+        'title' => $edit_group_booking_source['title'] ?? '',
+        'activity_details' => $edit_group_booking_source['activity_details'] ?? '',
+        'course_code' => $edit_group_booking_source['class_course_code'] ?? '',
+        'class_title' => $edit_group_booking_source['class_subject_name'] ?? '',
+        'class_group' => $edit_group_booking_source['class_section'] ?? '',
+        'class_pic' => '',
+        'group_weeks_count' => (string) ((int) ($edit_group_booking_source['group_weeks_count'] ?? 1) ?: 1),
+        'group_week_one_start_date' => (string) ($edit_group_booking_source['group_reference_date'] ?? $booking_date),
+        'group_midsem_start_date' => (string) ($edit_group_booking_source['group_midsem_start_date'] ?? ''),
+        'full_name' => $edit_group_booking_source['full_name'] ?? $user['name'],
+        'ic_no' => $edit_group_booking_source['ic_no'] ?? $user['ic_no'],
+        'email' => $edit_group_booking_source['email'] ?? $user['email'],
+        'phone' => $edit_group_booking_source['phone'] ?? $user['phone'],
+        'affiliation_type' => 'uthm',
+        'cluster_id' => (int) $lab['cluster_id'],
+        'public_agency_type' => 'private',
+        'public_sector' => '',
+        'government_info' => '',
+        'include_equipment' => 0,
+        'include_chemicals' => 0,
+        'is_student' => 0,
+        'supervisor_name' => '',
+        'supervisor_matric' => '',
+        'supervisor_phone' => '',
+        'supervisor_email' => ''
+    ];
+
+    if (preg_match('/(?:^|\n)PIC:\s*(.+)$/mi', (string) ($edit_group_booking_source['activity_details'] ?? ''), $matches)) {
+        $form_values['class_pic'] = trim((string) ($matches[1] ?? ''));
+    }
+
+    $decoded_group_sessions = json_decode((string) ($edit_group_booking_source['group_sessions_json'] ?? ''), true);
+    if (is_array($decoded_group_sessions)) {
+        foreach ($decoded_group_sessions as $session) {
+            $group_initial_sessions[] = [
+                'booking_type' => trim((string) ($session['booking_type'] ?? 'lecture')),
+                'day_of_week' => trim((string) ($session['day_of_week'] ?? 'Monday')),
+                'start_time' => trim((string) ($session['start_time'] ?? '09:00')),
+                'end_time' => trim((string) ($session['end_time'] ?? '10:00'))
+            ];
+        }
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $equipment_names = $_POST['equipment_name'] ?? [];
     $equipment_qty = $_POST['equipment_qty'] ?? [];
@@ -158,13 +479,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $equipment_items = [];
     $chemical_items = [];
 
-    $booking_purpose = $form_values['booking_purpose'] === 'class' ? 'class' : 'lab';
+    if ($delete_group_booking_requested) {
+        if (!$is_edit_group_booking || empty($editing_group_booking_ids) || empty($editing_group_reservation_ids)) {
+            $errors[] = 'Unable to load the selected group booking series for deletion.';
+        } else {
+            try {
+                $mysqli->begin_transaction();
+
+                $reservation_placeholders = implode(',', array_fill(0, count($editing_group_reservation_ids), '?'));
+                $reservation_types = str_repeat('i', count($editing_group_reservation_ids));
+
+                $delete_equipment_stmt = $mysqli->prepare(
+                    'DELETE FROM reservation_equipment WHERE reservation_id IN (' . $reservation_placeholders . ')'
+                );
+                if ($delete_equipment_stmt) {
+                    $delete_equipment_stmt->bind_param($reservation_types, ...$editing_group_reservation_ids);
+                    $delete_equipment_stmt->execute();
+                    $delete_equipment_stmt->close();
+                }
+
+                $delete_chemicals_stmt = $mysqli->prepare(
+                    'DELETE FROM reservation_chemicals WHERE reservation_id IN (' . $reservation_placeholders . ')'
+                );
+                if ($delete_chemicals_stmt) {
+                    $delete_chemicals_stmt->bind_param($reservation_types, ...$editing_group_reservation_ids);
+                    $delete_chemicals_stmt->execute();
+                    $delete_chemicals_stmt->close();
+                }
+
+                $delete_reservations_stmt = $mysqli->prepare(
+                    'DELETE FROM lab_reservations WHERE reservation_id IN (' . $reservation_placeholders . ')'
+                );
+                $delete_reservations_stmt->bind_param($reservation_types, ...$editing_group_reservation_ids);
+                $delete_reservations_stmt->execute();
+                $delete_reservations_stmt->close();
+
+                $booking_placeholders = implode(',', array_fill(0, count($editing_group_booking_ids), '?'));
+                $booking_types = str_repeat('i', count($editing_group_booking_ids));
+                $delete_bookings_stmt = $mysqli->prepare(
+                    'DELETE FROM lab_bookings WHERE ' . $booking_pk . ' IN (' . $booking_placeholders . ')'
+                );
+                $delete_bookings_stmt->bind_param($booking_types, ...$editing_group_booking_ids);
+                $delete_bookings_stmt->execute();
+                $delete_bookings_stmt->close();
+
+                $mysqli->commit();
+                set_flash('info', 'Group booking deleted successfully.');
+                header('Location: dashboard.php');
+                exit;
+            } catch (Exception $e) {
+                $mysqli->rollback();
+                $errors[] = $e->getMessage() ?: 'Unable to delete group booking.';
+            }
+        }
+    }
+
+    $booking_mode = $form_values['booking_mode'] === 'group' ? 'group' : 'slot';
+    if (!$is_lab_supervisor) {
+        $booking_mode = 'slot';
+    }
+    $booking_purpose = $booking_mode === 'group' ? 'class' : 'lab';
     $title = trim($form_values['title']);
     $activity_details = trim($form_values['activity_details']);
     $course_code = trim($form_values['course_code']);
     $class_title = trim($form_values['class_title']);
     $class_group = trim($form_values['class_group']);
-    $class_notes = trim($form_values['class_notes']);
+    $class_pic = trim($form_values['class_pic']);
+    $group_weeks_count = (int) $form_values['group_weeks_count'];
+    $group_weeks_count = $group_weeks_count > 0 ? $group_weeks_count : 1;
+    $group_week_one_start_date = trim((string) ($form_values['group_week_one_start_date'] ?? ''));
+    $group_midsem_start_date = trim((string) ($form_values['group_midsem_start_date'] ?? ''));
+    $group_midsem_end_date = '';
     $full_name = trim($form_values['full_name']);
     $ic_no = trim($form_values['ic_no']);
     $email = trim($form_values['email']);
@@ -181,27 +566,126 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $supervisor_matric = trim($form_values['supervisor_matric']);
     $supervisor_phone = trim($form_values['supervisor_phone']);
     $supervisor_email = trim($form_values['supervisor_email']);
+    $min_date = (new DateTime('today'))->modify('+3 days')->format('Y-m-d');
+    $group_reference_date = $group_week_one_start_date !== '' ? $group_week_one_start_date : $booking_date;
+    $group_sessions = [];
+    $group_sessions_payload = [];
+    $group_schedule_json = null;
+    $planned_group_rows = [];
+    $group_period_start = null;
+    $group_period_end = null;
 
-    if ($booking_purpose === 'class') {
+    if ($booking_mode === 'group') {
         if ($course_code === '') {
-            $errors[] = 'Course code is required.';
+            add_form_field_error($field_errors, 'course_code', 'Course code is required.');
         } elseif (mb_strlen($course_code) > 8) {
-            $errors[] = 'Course code must not exceed 8 characters.';
+            add_form_field_error($field_errors, 'course_code', 'Course code must not exceed 8 characters.');
         }
         if ($class_title === '') {
-            $errors[] = 'Subject name is required.';
+            add_form_field_error($field_errors, 'class_title', 'Subject name is required.');
         } elseif (str_word_count($class_title) > 50) {
-            $errors[] = 'Subject name must not exceed 50 words.';
+            add_form_field_error($field_errors, 'class_title', 'Subject name must not exceed 50 words.');
         }
         if ($class_group === '') {
-            $errors[] = 'Class section number is required.';
+            add_form_field_error($field_errors, 'class_group', 'Class section number is required.');
         } elseif (!preg_match('/^\d+$/', $class_group)) {
-            $errors[] = 'Class section number must contain digits only.';
+            add_form_field_error($field_errors, 'class_group', 'Class section number must contain digits only.');
+        }
+        if ($class_pic === '') {
+            add_form_field_error($field_errors, 'class_pic', 'PIC is required.');
+        }
+        if ($group_weeks_count < 1) {
+            add_form_field_error($field_errors, 'group_weeks_count', 'Please select how many weeks to book.');
+        } elseif ($group_weeks_count > 52) {
+            add_form_field_error($field_errors, 'group_weeks_count', 'Group bookings cannot exceed 52 weeks.');
+        }
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $group_reference_date)) {
+            add_form_field_error($field_errors, 'group_week_one_start_date', 'Please select a valid Week 1 start date.');
+        } elseif ($group_reference_date < $min_date) {
+            add_form_field_error($field_errors, 'group_week_one_start_date', 'Group bookings must start at least 3 days in advance.');
+        }
+        if ($group_midsem_start_date !== '') {
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $group_midsem_start_date)) {
+                add_form_field_error($field_errors, 'group_midsem_start_date', 'Please select a valid mid-sem break start date.');
+            } else {
+                $midsem_end = DateTime::createFromFormat('Y-m-d', $group_midsem_start_date);
+                if ($midsem_end instanceof DateTime) {
+                    $midsem_end->modify('+6 days');
+                    $group_midsem_end_date = $midsem_end->format('Y-m-d');
+                }
+            }
+        }
+
+        $group_day_map = [
+            'Sunday' => 0,
+            'Monday' => 1,
+            'Tuesday' => 2,
+            'Wednesday' => 3,
+            'Thursday' => 4,
+            'Friday' => 5,
+            'Saturday' => 6
+        ];
+        $session_types = $_POST['group_session_type'] ?? [];
+        $session_days = $_POST['group_day_of_week'] ?? [];
+        $session_start_times = $_POST['group_start_time'] ?? [];
+        $session_end_times = $_POST['group_end_time'] ?? [];
+        foreach ($session_days as $index => $session_day) {
+            $session_type = trim((string) ($session_types[$index] ?? 'lecture'));
+            $session_day = trim((string) $session_day);
+            $session_start_time = trim((string) ($session_start_times[$index] ?? ''));
+            $session_end_time = trim((string) ($session_end_times[$index] ?? ''));
+            if ($session_day === '' && $session_start_time === '' && $session_end_time === '' && $session_type === '') {
+                continue;
+            }
+            if (!in_array($session_type, ['lecture', 'lab'], true)) {
+                add_form_field_error($field_errors, 'group_sessions', 'Please select a valid session type for each row.');
+                break;
+            }
+            if (!array_key_exists($session_day, $group_day_map)) {
+                add_form_field_error($field_errors, 'group_sessions', 'Please select a valid weekday for each group session.');
+                break;
+            }
+            $start_minutes = labs_time_to_minutes($session_start_time);
+            $end_minutes = labs_time_to_minutes($session_end_time);
+            if ($start_minutes === null || $end_minutes === null) {
+                add_form_field_error($field_errors, 'group_sessions', 'Please select a valid start and end time for each session.');
+                break;
+            }
+            if ($start_minutes >= $end_minutes) {
+                add_form_field_error($field_errors, 'group_sessions', 'Session end time must be later than start time.');
+                break;
+            }
+            if ($start_minutes % 60 !== 0 || $end_minutes % 60 !== 0) {
+                add_form_field_error($field_errors, 'group_sessions', 'Group sessions must use full-hour time slots.');
+                break;
+            }
+            $group_sessions[] = [
+                'lab_id' => $lab_id,
+                'booking_type' => $session_type,
+                'day_of_week' => $session_day,
+                'start_time' => labs_minutes_to_time_label($start_minutes),
+                'end_time' => labs_minutes_to_time_label($end_minutes)
+            ];
+        }
+        if (!$group_sessions) {
+            add_form_field_error($field_errors, 'group_sessions', 'Please add at least one group session.');
+        }
+        if (!$errors) {
+            $group_sessions_payload = $group_sessions;
         }
         $title = trim($course_code . ' - ' . $class_title, ' -');
-        $activity_details = "Booking purpose: Class\nCourse code: {$course_code}\nSubject name: {$class_title}\nClass section number: {$class_group}";
-        if ($class_notes !== '') {
-            $activity_details .= "\nNotes: {$class_notes}";
+        $activity_details = "Booking purpose: Group Booking\nCourse code: {$course_code}\nSubject name: {$class_title}\nClass section number: {$class_group}\nWeeks to book: {$group_weeks_count}\nWeek 1 start date: {$group_reference_date}";
+        if ($group_midsem_start_date !== '' && $group_midsem_end_date !== '') {
+            $activity_details .= "\nMid-sem break week: {$group_midsem_start_date} to {$group_midsem_end_date}";
+        }
+        if ($group_sessions) {
+            $activity_details .= "\nSessions:";
+            foreach ($group_sessions as $session) {
+                $activity_details .= "\n- " . ucfirst($session['booking_type']) . ' / ' . $session['day_of_week'] . ' / ' . $session['start_time'] . '-' . $session['end_time'];
+            }
+        }
+        if ($class_pic !== '') {
+            $activity_details .= "\nPIC: {$class_pic}";
         }
     } else {
         if ($title === '') {
@@ -216,16 +700,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($booking_purpose === 'class') {
         if ($ic_no === '') {
-            $errors[] = 'Staff ID is required.';
+            add_form_field_error($field_errors, 'ic_no', 'Staff ID is required.');
         }
     } elseif ($ic_no === '' || !preg_match('/^\d{12}$/', $ic_no)) {
-        $errors[] = 'IC number must be 12 digits.';
+        add_form_field_error($field_errors, 'ic_no', 'IC number must be 12 digits.');
     }
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $errors[] = 'Valid email is required.';
+        add_form_field_error($field_errors, 'email', 'Valid email is required.');
     }
     if ($phone === '' || !preg_match('/^\d{9,12}$/', $phone)) {
-        $errors[] = 'Phone number must be 9 to 12 digits.';
+        add_form_field_error($field_errors, 'phone', 'Phone number must be 9 to 12 digits.');
     }
 
     if ($booking_purpose === 'class') {
@@ -263,18 +747,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    $min_date = (new DateTime('today'))->modify('+3 days')->format('Y-m-d');
-    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $booking_date)) {
-        $errors[] = 'Please select a valid booking date.';
-    } elseif ($booking_date < $min_date) {
-        $errors[] = 'Bookings must be made at least 3 days in advance.';
-    } elseif (is_lab_under_maintenance($lab, $booking_date)) {
-        $errors[] = 'This lab is under maintenance on the selected date.';
+    if ($booking_mode === 'slot') {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $booking_date)) {
+            $errors[] = 'Please select a valid booking date.';
+        } elseif ($booking_date < $min_date) {
+            $errors[] = 'Bookings must be made at least 3 days in advance.';
+        } elseif (is_lab_under_maintenance($lab, $booking_date)) {
+            $errors[] = 'This lab is under maintenance on the selected date.';
+        }
     }
 
-    if (empty($selected_time_slots)) {
+    if ($booking_mode === 'slot' && empty($selected_time_slots)) {
         $errors[] = 'Please select at least one time slot.';
-    } else {
+    } elseif (!empty($selected_time_slots)) {
         foreach ($selected_time_slots as $slot) {
             if (!in_array($slot, $time_slots, true)) {
                 $errors[] = 'Invalid time slot: ' . htmlspecialchars($slot);
@@ -347,21 +832,138 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    if (!$errors) {
+    if (!$errors && !$field_errors) {
         $stmt = $mysqli->prepare("SELECT {$booking_pk} FROM lab_bookings WHERE lab_id = ? AND booking_date = ? AND time_slot = ? AND status = 'Approved' LIMIT 1");
-        foreach ($selected_time_slots as $selected_slot) {
-            $stmt->bind_param('iss', $lab_id, $booking_date, $selected_slot);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            if ($result->fetch_assoc()) {
-                $errors[] = 'Slot ' . $selected_slot . ' is already booked.';
-                break;
+        if ($booking_mode === 'group') {
+            $group_conflict_stmt = null;
+            if ($is_edit_group_booking && $editing_group_booking_key) {
+                $group_conflict_stmt = $mysqli->prepare("
+                    SELECT lb.{$booking_pk}
+                    FROM lab_bookings lb
+                    LEFT JOIN lab_reservations lr ON lr.booking_id = lb.{$booking_pk}
+                    WHERE lb.lab_id = ?
+                      AND lb.booking_date = ?
+                      AND lb.time_slot = ?
+                      AND lb.status = 'Approved'
+                      AND (lr.group_booking_key IS NULL OR lr.group_booking_key <> ?)
+                    LIMIT 1
+                ");
+            }
+            $group_schedule_json = json_encode($group_sessions, JSON_UNESCAPED_UNICODE);
+            $planned_group_rows = [];
+            $group_period_start = null;
+            $group_period_end = null;
+            foreach ($group_sessions as $session) {
+                $first_occurrence = labs_first_occurrence_date($group_reference_date, $session['day_of_week']);
+                if (!$first_occurrence) {
+                    $errors[] = 'Please select a valid reference date and weekday.';
+                    break;
+                }
+                $session_slots = labs_generate_hour_slots($session['start_time'], $session['end_time']);
+                if (!$session_slots) {
+                    $errors[] = 'Please select at least one full-hour slot for each group session.';
+                    break;
+                }
+                $scheduled_weeks = 0;
+                $occurrence_date = clone $first_occurrence;
+                while ($scheduled_weeks < $group_weeks_count) {
+                    $occurrence_date_string = $occurrence_date->format('Y-m-d');
+                    if (labs_date_within_range($occurrence_date_string, $group_midsem_start_date ?: null, $group_midsem_end_date ?: null)) {
+                        $occurrence_date->modify('+7 days');
+                        continue;
+                    }
+                    $planned_group_rows[] = [
+                        'lab_id' => (int) $session['lab_id'],
+                        'booking_type' => $session['booking_type'],
+                        'booking_date' => $occurrence_date_string,
+                        'start_time' => $session['start_time'],
+                        'end_time' => $session['end_time'],
+                        'slots' => $session_slots,
+                        'day_of_week' => $session['day_of_week']
+                    ];
+                    if ($group_period_start === null || $occurrence_date_string < $group_period_start) {
+                        $group_period_start = $occurrence_date_string;
+                    }
+                    if ($group_period_end === null || $occurrence_date_string > $group_period_end) {
+                        $group_period_end = $occurrence_date_string;
+                    }
+                    $scheduled_weeks++;
+                    $occurrence_date->modify('+7 days');
+                }
+            }
+            if (!$errors && !$field_errors) {
+                foreach ($planned_group_rows as $planned_row) {
+                    $planned_lab_id = (int) $planned_row['lab_id'];
+                    $planned_date = $planned_row['booking_date'];
+                    $planned_lab = null;
+                    $stmt_lab = $mysqli->prepare('
+                        SELECT lab_id, lab_name, maintenance_status, maintenance_start_date, maintenance_end_date
+                        FROM labs
+                        WHERE lab_id = ?
+                        LIMIT 1
+                    ');
+                    if ($stmt_lab) {
+                        $stmt_lab->bind_param('i', $planned_lab_id);
+                        $stmt_lab->execute();
+                        $stmt_lab->bind_result($lab_id_value, $lab_name_value, $maintenance_status_value, $maintenance_start_date_value, $maintenance_end_date_value);
+                        if ($stmt_lab->fetch()) {
+                            $planned_lab = [
+                                'lab_id' => $lab_id_value,
+                                'lab_name' => $lab_name_value,
+                                'maintenance_status' => $maintenance_status_value,
+                                'maintenance_start_date' => $maintenance_start_date_value,
+                                'maintenance_end_date' => $maintenance_end_date_value
+                            ];
+                        }
+                        $stmt_lab->close();
+                    }
+                    if (!$planned_lab) {
+                        $errors[] = 'Unable to load one of the selected labs.';
+                        break;
+                    }
+                    if (is_lab_under_maintenance($planned_lab, $planned_date)) {
+                        $errors[] = 'Selected group session falls on a maintenance date for ' . $planned_lab['lab_name'] . '.';
+                        break;
+                    }
+                    foreach ($planned_row['slots'] as $planned_slot) {
+                        if ($group_conflict_stmt) {
+                            $group_conflict_stmt->bind_param('isss', $planned_lab_id, $planned_date, $planned_slot, $editing_group_booking_key);
+                            $group_conflict_stmt->execute();
+                            $result = $group_conflict_stmt->get_result();
+                        } else {
+                            $stmt->bind_param('iss', $planned_lab_id, $planned_date, $planned_slot);
+                            $stmt->execute();
+                            $result = $stmt->get_result();
+                        }
+                        if ($result && $result->fetch_assoc()) {
+                            $errors[] = 'Slot ' . $planned_slot . ' on ' . $planned_date . ' is already booked.';
+                            break 2;
+                        }
+                    }
+                }
+            }
+            if ($group_conflict_stmt) {
+                $group_conflict_stmt->close();
+            }
+        } else {
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $booking_date)) {
+                $errors[] = 'Please select a valid booking date.';
+            } else {
+                foreach ($selected_time_slots as $selected_slot) {
+                    $stmt->bind_param('iss', $lab_id, $booking_date, $selected_slot);
+                    $stmt->execute();
+                    $result = $stmt->get_result();
+                    if ($result->fetch_assoc()) {
+                        $errors[] = 'Slot ' . $selected_slot . ' is already booked.';
+                        break;
+                    }
+                }
             }
         }
         $stmt->close();
     }
 
-    if (!$errors) {
+    if (!$errors && !$field_errors) {
         $mysqli->begin_transaction();
         try {
             if (!empty($_FILES['document']['name'])) {
@@ -381,12 +983,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $reservation_stmt = $mysqli->prepare('
                 INSERT INTO lab_reservations (
                     booking_id, title, activity_details, full_name, ic_no, email, phone,
-                    booking_purpose, class_course_code, class_subject_name, class_section,
+                    booking_purpose, booking_mode, class_course_code, class_subject_name, class_section,
+                    group_booking_type, group_weeks_count, group_reference_date, group_start_date, group_end_date, group_midsem_start_date, group_midsem_end_date, group_sessions_json, group_booking_key,
                     affiliation_type, cluster_id, public_agency_type, public_sector, government_info,
                     include_equipment, include_chemicals, booking_date, start_time, end_time, is_student,
                     supervisor_name, supervisor_matric, supervisor_phone, supervisor_email, document_path,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
             ');
             $equipment_stmt = null;
             $chemical_stmt = null;
@@ -403,57 +1006,192 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ');
             }
 
-            foreach ($selected_time_slots as $selected_slot) {
-                [$slot_start_time, $slot_end_time] = array_map('trim', explode('-', $selected_slot, 2));
+            $reservation_booking_mode = $booking_mode;
+            $reservation_group_booking_type = null;
+            $reservation_group_weeks_count = $booking_mode === 'group' ? $group_weeks_count : null;
+            $reservation_group_reference_date = $booking_mode === 'group' ? $group_reference_date : null;
+            $reservation_group_start_date = $booking_mode === 'group' ? $group_period_start : null;
+            $reservation_group_end_date = $booking_mode === 'group' ? $group_period_end : null;
+            $reservation_group_midsem_start_date = $booking_mode === 'group' && $group_midsem_start_date !== '' ? $group_midsem_start_date : null;
+            $reservation_group_midsem_end_date = $booking_mode === 'group' && $group_midsem_end_date !== '' ? $group_midsem_end_date : null;
+            $reservation_group_sessions_json = $booking_mode === 'group' ? $group_schedule_json : null;
+            $reservation_group_booking_key = $booking_mode === 'group'
+                ? ($editing_group_booking_key ?: labs_generate_group_booking_key())
+                : null;
+            $reservation_bind_types = 'i' . str_repeat('s', 12) . 'i' . str_repeat('s', 8) . 'i' . str_repeat('s', 3) . 'ii' . str_repeat('s', 3) . 'i' . str_repeat('s', 5);
 
-                $booking_stmt->bind_param('iiss', $user_id, $lab_id, $booking_date, $selected_slot);
-                $booking_stmt->execute();
-                $booking_id = (int) $booking_stmt->insert_id;
-
-                $reservation_stmt->bind_param(
-                    'isssssssssssisssiisssisssss',
-                    $booking_id,
-                    $title,
-                    $activity_details,
-                    $full_name,
-                    $ic_no,
-                    $email,
-                    $phone,
-                    $booking_purpose,
-                    $course_code,
-                    $class_title,
-                    $class_group,
-                    $affiliation_type,
-                    $cluster_id,
-                    $public_agency_type,
-                    $public_sector,
-                    $government_info,
-                    $include_equipment,
-                    $include_chemicals,
-                    $booking_date,
-                    $slot_start_time,
-                    $slot_end_time,
-                    $is_student,
-                    $supervisor_name,
-                    $supervisor_matric,
-                    $supervisor_phone,
-                    $supervisor_email,
-                    $document_path
-                );
-                $reservation_stmt->execute();
-                $reservation_id = (int) $reservation_stmt->insert_id;
-
-                if ($equipment_stmt) {
-                    foreach ($equipment_items as $item) {
-                        $equipment_stmt->bind_param('isis', $reservation_id, $item['name'], $item['qty'], $item['notes']);
-                        $equipment_stmt->execute();
-                    }
+            if ($booking_mode === 'group' && $is_edit_group_booking) {
+                if (empty($editing_group_booking_ids) || empty($editing_group_reservation_ids)) {
+                    throw new Exception('Unable to load the selected group booking series for editing.');
                 }
 
-                if ($chemical_stmt) {
-                    foreach ($chemical_items as $item) {
-                        $chemical_stmt->bind_param('isii', $reservation_id, $item['name'], $item['qty'], $item['ppe']);
-                        $chemical_stmt->execute();
+                $reservation_placeholders = implode(',', array_fill(0, count($editing_group_reservation_ids), '?'));
+                $reservation_types = str_repeat('i', count($editing_group_reservation_ids));
+
+                $delete_equipment_stmt = $mysqli->prepare(
+                    'DELETE FROM reservation_equipment WHERE reservation_id IN (' . $reservation_placeholders . ')'
+                );
+                if ($delete_equipment_stmt) {
+                    $delete_equipment_stmt->bind_param($reservation_types, ...$editing_group_reservation_ids);
+                    $delete_equipment_stmt->execute();
+                    $delete_equipment_stmt->close();
+                }
+
+                $delete_chemicals_stmt = $mysqli->prepare(
+                    'DELETE FROM reservation_chemicals WHERE reservation_id IN (' . $reservation_placeholders . ')'
+                );
+                if ($delete_chemicals_stmt) {
+                    $delete_chemicals_stmt->bind_param($reservation_types, ...$editing_group_reservation_ids);
+                    $delete_chemicals_stmt->execute();
+                    $delete_chemicals_stmt->close();
+                }
+
+                $delete_reservations_stmt = $mysqli->prepare(
+                    'DELETE FROM lab_reservations WHERE reservation_id IN (' . $reservation_placeholders . ')'
+                );
+                $delete_reservations_stmt->bind_param($reservation_types, ...$editing_group_reservation_ids);
+                $delete_reservations_stmt->execute();
+                $delete_reservations_stmt->close();
+
+                $booking_placeholders = implode(',', array_fill(0, count($editing_group_booking_ids), '?'));
+                $booking_types = str_repeat('i', count($editing_group_booking_ids));
+                $delete_bookings_stmt = $mysqli->prepare(
+                    'DELETE FROM lab_bookings WHERE ' . $booking_pk . ' IN (' . $booking_placeholders . ')'
+                );
+                $delete_bookings_stmt->bind_param($booking_types, ...$editing_group_booking_ids);
+                $delete_bookings_stmt->execute();
+                $delete_bookings_stmt->close();
+            }
+
+            if ($booking_mode === 'group') {
+                foreach ($planned_group_rows as $planned_row) {
+                    foreach ($planned_row['slots'] as $planned_slot) {
+                        [$slot_start_time, $slot_end_time] = array_map('trim', explode('-', $planned_slot, 2));
+                        $booking_stmt->bind_param('iiss', $user_id, $planned_row['lab_id'], $planned_row['booking_date'], $planned_slot);
+                        $booking_stmt->execute();
+                        $booking_id = (int) $booking_stmt->insert_id;
+
+                        $reservation_stmt->bind_param(
+                            $reservation_bind_types,
+                            $booking_id,
+                            $title,
+                            $activity_details,
+                            $full_name,
+                            $ic_no,
+                            $email,
+                            $phone,
+                            $booking_purpose,
+                            $reservation_booking_mode,
+                            $course_code,
+                            $class_title,
+                            $class_group,
+                            $planned_row['booking_type'],
+                            $reservation_group_weeks_count,
+                            $reservation_group_reference_date,
+                            $reservation_group_start_date,
+                            $reservation_group_end_date,
+                            $reservation_group_midsem_start_date,
+                            $reservation_group_midsem_end_date,
+                            $reservation_group_sessions_json,
+                            $reservation_group_booking_key,
+                            $affiliation_type,
+                            $cluster_id,
+                            $public_agency_type,
+                            $public_sector,
+                            $government_info,
+                            $include_equipment,
+                            $include_chemicals,
+                            $planned_row['booking_date'],
+                            $slot_start_time,
+                            $slot_end_time,
+                            $is_student,
+                            $supervisor_name,
+                            $supervisor_matric,
+                            $supervisor_phone,
+                            $supervisor_email,
+                            $document_path
+                        );
+                        $reservation_stmt->execute();
+                        $reservation_id = (int) $reservation_stmt->insert_id;
+
+                        if ($equipment_stmt) {
+                            foreach ($equipment_items as $item) {
+                                $equipment_stmt->bind_param('isis', $reservation_id, $item['name'], $item['qty'], $item['notes']);
+                                $equipment_stmt->execute();
+                            }
+                        }
+
+                        if ($chemical_stmt) {
+                            foreach ($chemical_items as $item) {
+                                $chemical_stmt->bind_param('isii', $reservation_id, $item['name'], $item['qty'], $item['ppe']);
+                                $chemical_stmt->execute();
+                            }
+                        }
+                    }
+                }
+            } else {
+                foreach ($selected_time_slots as $selected_slot) {
+                    [$slot_start_time, $slot_end_time] = array_map('trim', explode('-', $selected_slot, 2));
+
+                    $booking_stmt->bind_param('iiss', $user_id, $lab_id, $booking_date, $selected_slot);
+                    $booking_stmt->execute();
+                    $booking_id = (int) $booking_stmt->insert_id;
+
+                    $reservation_stmt->bind_param(
+                        $reservation_bind_types,
+                        $booking_id,
+                        $title,
+                        $activity_details,
+                        $full_name,
+                        $ic_no,
+                        $email,
+                        $phone,
+                        $booking_purpose,
+                        $reservation_booking_mode,
+                        $course_code,
+                        $class_title,
+                        $class_group,
+                        $reservation_group_booking_type,
+                        $reservation_group_weeks_count,
+                        $reservation_group_reference_date,
+                        $reservation_group_start_date,
+                        $reservation_group_end_date,
+                        $reservation_group_midsem_start_date,
+                        $reservation_group_midsem_end_date,
+                        $reservation_group_sessions_json,
+                        $reservation_group_booking_key,
+                        $affiliation_type,
+                        $cluster_id,
+                        $public_agency_type,
+                        $public_sector,
+                        $government_info,
+                        $include_equipment,
+                        $include_chemicals,
+                        $booking_date,
+                        $slot_start_time,
+                        $slot_end_time,
+                        $is_student,
+                        $supervisor_name,
+                        $supervisor_matric,
+                        $supervisor_phone,
+                        $supervisor_email,
+                        $document_path
+                    );
+                    $reservation_stmt->execute();
+                    $reservation_id = (int) $reservation_stmt->insert_id;
+
+                    if ($equipment_stmt) {
+                        foreach ($equipment_items as $item) {
+                            $equipment_stmt->bind_param('isis', $reservation_id, $item['name'], $item['qty'], $item['notes']);
+                            $equipment_stmt->execute();
+                        }
+                    }
+
+                    if ($chemical_stmt) {
+                        foreach ($chemical_items as $item) {
+                            $chemical_stmt->bind_param('isii', $reservation_id, $item['name'], $item['qty'], $item['ppe']);
+                            $chemical_stmt->execute();
+                        }
                     }
                 }
             }
@@ -467,9 +1205,131 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $chemical_stmt->close();
             }
 
+            if ($booking_purpose === 'class') {
+                sync_user_profile_from_booking_form(
+                    $mysqli,
+                    $user_id,
+                    $full_name,
+                    $email,
+                    $phone,
+                    $user['ic_no'] ?? null,
+                    $ic_no
+                );
+            } else {
+                sync_user_profile_from_booking_form(
+                    $mysqli,
+                    $user_id,
+                    $full_name,
+                    $email,
+                    $phone,
+                    $ic_no,
+                    $user['student_staff_id'] ?? null
+                );
+            }
+
             $mysqli->commit();
-            $success_prefix = $booking_purpose === 'class' ? 'Class booking submitted successfully' : 'Reservation submitted successfully';
-            set_flash('info', $success_prefix . ' for ' . count($selected_time_slots) . ' slot' . (count($selected_time_slots) === 1 ? '' : 's') . '.');
+            $_SESSION['user_name'] = $full_name;
+            $_SESSION['user_email'] = $email;
+            $notification_user_id = (int) ($_SESSION['user_id'] ?? 0);
+            $actor_name = trim((string) ($_SESSION['user_name'] ?? 'User'));
+            $group_notification_slots = [];
+            if ($booking_mode === 'group') {
+                foreach ($group_sessions as $session) {
+                    $group_notification_slots[] = ucfirst((string) ($session['booking_type'] ?? 'session')) . ' - '
+                        . (string) ($session['day_of_week'] ?? '-') . ' - '
+                        . (string) ($session['start_time'] ?? '-') . ' to '
+                        . (string) ($session['end_time'] ?? '-');
+                }
+            }
+            if ($notification_user_id > 0) {
+                if ($booking_mode === 'group') {
+                    $notification_title = $is_edit_group_booking ? 'Group booking updated' : 'Group booking submitted';
+                    $notification_message = build_booking_notification_message(
+                        (string) $lab['lab_name'],
+                        $title,
+                        $activity_details,
+                        $group_reference_date,
+                        $group_notification_slots,
+                        $full_name,
+                        $email,
+                        $phone,
+                        $ic_no
+                    );
+                } else {
+                    $notification_title = 'Lab booking submitted';
+                    $notification_message = build_booking_notification_message(
+                        (string) $lab['lab_name'],
+                        $title,
+                        $activity_details,
+                        $booking_date,
+                        $selected_time_slots,
+                        $full_name,
+                        $email,
+                        $phone,
+                        $ic_no
+                    );
+                }
+                create_and_send_user_notification(
+                    $mysqli,
+                    $notification_user_id,
+                    $notification_title,
+                    $notification_message,
+                    'success',
+                    'dashboard.php',
+                    true
+                );
+            }
+            $management_recipient_ids = get_lab_notification_recipient_user_ids(
+                $mysqli,
+                (int) ($lab['lab_id'] ?? 0),
+                (int) ($lab['cluster_id'] ?? 0),
+                $notification_user_id > 0 ? [$notification_user_id] : []
+            );
+            if ($management_recipient_ids) {
+                if ($booking_mode === 'group') {
+                    $management_title = $is_edit_group_booking ? 'Group booking updated for your lab' : 'New group booking for your lab';
+                    $management_message = build_booking_notification_message(
+                        (string) $lab['lab_name'],
+                        $title,
+                        $activity_details,
+                        $group_reference_date,
+                        $group_notification_slots,
+                        $actor_name,
+                        $email,
+                        $phone,
+                        $ic_no
+                    );
+                } else {
+                    $management_title = 'New lab booking for your lab';
+                    $management_message = build_booking_notification_message(
+                        (string) $lab['lab_name'],
+                        $title,
+                        $activity_details,
+                        $booking_date,
+                        $selected_time_slots,
+                        $actor_name,
+                        $email,
+                        $phone,
+                        $ic_no
+                    );
+                }
+                create_and_send_bulk_user_notifications(
+                    $mysqli,
+                    $management_recipient_ids,
+                    $management_title,
+                    $management_message,
+                    'info',
+                    'booking-management.php',
+                    true
+                );
+            }
+            if ($booking_mode === 'group') {
+                $success_prefix = $is_edit_group_booking ? 'Group booking updated successfully' : 'Group booking submitted successfully';
+                set_flash('info', $success_prefix . ' for ' . $group_weeks_count . ' week' . ($group_weeks_count === 1 ? '' : 's') . ' across ' . count($group_sessions) . ' session' . (count($group_sessions) === 1 ? '' : 's') . '.');
+            } else {
+                $success_prefix = 'Reservation submitted successfully';
+                set_flash('info', $success_prefix . ' for ' . count($selected_time_slots) . ' slot' . (count($selected_time_slots) === 1 ? '' : 's') . '.');
+            }
             header('Location: dashboard.php');
             exit;
         } catch (Exception $e) {
@@ -497,6 +1357,14 @@ if ($is_lab_supervisor) {
 }
 $layout = require $layout_path;
 $active = 'booking';
+$group_midsem_display = 'Not set';
+if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $form_values['group_midsem_start_date'])) {
+    $group_midsem_display_end = DateTime::createFromFormat('Y-m-d', (string) $form_values['group_midsem_start_date']);
+    if ($group_midsem_display_end instanceof DateTime) {
+        $group_midsem_display_end->modify('+6 days');
+        $group_midsem_display = $form_values['group_midsem_start_date'] . ' to ' . $group_midsem_display_end->format('Y-m-d');
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -504,7 +1372,7 @@ $active = 'booking';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lab Reservation Form</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.css') ?: time()); ?>">
 </head>
 <body data-login-url="index.php">
     <div class="app">
@@ -572,8 +1440,8 @@ $active = 'booking';
             <section class="content">
                 <div class="content-header">
                     <div>
-                        <h1>Lab Reservation Form</h1>
-                        <p>Complete the details to submit your reservation.</p>
+                        <h1><?php echo $is_edit_group_booking ? 'Edit Group Booking' : 'Lab Reservation Form'; ?></h1>
+                        <p><?php echo $is_edit_group_booking ? 'Update the recurring booking details for this lab.' : 'Complete the details to submit your reservation.'; ?></p>
                         <?php if (($lab['maintenance_status'] ?? 'available') === 'maintenance'): ?>
                             <p class="muted-text">Maintenance window: <?php echo htmlspecialchars(get_lab_maintenance_period_label($lab['maintenance_start_date'] ?? null, $lab['maintenance_end_date'] ?? null)); ?></p>
                         <?php endif; ?>
@@ -593,12 +1461,24 @@ $active = 'booking';
                     <div class="card">
                         <div class="banner">
                             <div>
-                                <p class="badge">Lab Reservation Form</p>
-                                <h2><?php echo htmlspecialchars($lab['lab_name']); ?></h2>
-                                <p>
-                                    Booking date: <?php echo htmlspecialchars($booking_date ?: 'Not selected'); ?>
-                                    <span class="muted-text">Lead time: 3 days</span>
+                                <p class="badge">
+                                    <?php
+                                    if ($is_edit_group_booking) {
+                                        echo 'Edit Group Booking';
+                                    } elseif ($booking_mode === 'group') {
+                                        echo 'Group Booking Form';
+                                    } else {
+                                        echo 'Lab Reservation Form';
+                                    }
+                                    ?>
                                 </p>
+                                <h2><?php echo htmlspecialchars($lab['lab_name']); ?></h2>
+                                <?php if ($booking_mode !== 'group'): ?>
+                                    <p>
+                                        Booking date: <?php echo htmlspecialchars($booking_date ?: 'Not selected'); ?>
+                                        <span class="muted-text">Lead time: 3 days</span>
+                                    </p>
+                                <?php endif; ?>
                             </div>
                             <div class="banner-links">
                                 <a class="btn ghost" href="availability.php?lab_id=<?php echo (int) $lab_id; ?>">Back to Lab</a>
@@ -612,27 +1492,10 @@ $active = 'booking';
                         <input type="hidden" name="time_slots" value="<?php echo htmlspecialchars(json_encode($selected_time_slots)); ?>">
                         <input type="hidden" name="start_time" value="<?php echo htmlspecialchars($start_time); ?>">
                         <input type="hidden" name="end_time" value="<?php echo htmlspecialchars($end_time); ?>">
-
-                        <div class="form-section" id="booking-purpose-section">
-                            <div class="section-header">
-                                <div>
-                                    <h3>Booking Purpose</h3>
-                                    <p class="muted-text">Choose the booking purpose. The form below will switch automatically.</p>
-                                </div>
-                            </div>
-                            <div class="purpose-toggle-row">
-                                <div class="toggle-group purpose-toggle-group">
-                                    <label class="toggle-option">
-                                        <input type="radio" name="booking_purpose" value="lab" <?php echo $form_values['booking_purpose'] !== 'class' ? 'checked' : ''; ?>>
-                                        <span>Book Lab</span>
-                                    </label>
-                                    <label class="toggle-option">
-                                        <input type="radio" name="booking_purpose" value="class" <?php echo $form_values['booking_purpose'] === 'class' ? 'checked' : ''; ?>>
-                                        <span>Book Class</span>
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
+                        <input type="hidden" id="booking-mode" name="booking_mode" value="<?php echo htmlspecialchars($form_values['booking_mode']); ?>">
+                        <?php if ($is_edit_group_booking): ?>
+                            <input type="hidden" name="edit_group_reservation_id" value="<?php echo (int) $edit_group_reservation_id; ?>">
+                        <?php endif; ?>
 
                         <div class="form-section" id="lab-details-section">
                             <div class="section-header">
@@ -653,30 +1516,95 @@ $active = 'booking';
                             </div>
                         </div>
 
-                        <div class="form-section" id="class-details-section">
+                        <div class="form-section" id="group-details-section">
                             <div class="section-header">
                                 <div>
-                                    <h3>Class Details</h3>
-                                    <p class="muted-text">Simple schedule details for teaching sessions.</p>
+                                    <h3>Group Booking Details</h3></br>
                                 </div>
                             </div>
                             <div class="form-row">
                                 <div>
-                                    <label for="course-code">Course Code *</label>
+                                    <label for="course-code">Course Code (BIW33503)*</label>
                                     <input id="course-code" name="course_code" type="text" maxlength="8" value="<?php echo htmlspecialchars($form_values['course_code']); ?>" placeholder="Enter course code">
+                                    <?php if (!empty($field_errors['course_code'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['course_code'][0]); ?></div>
+                                    <?php endif; ?>
                                 </div>
                                 <div>
                                     <label for="class-title">Subject Name *</label>
                                     <input id="class-title" name="class_title" type="text" value="<?php echo htmlspecialchars($form_values['class_title']); ?>" placeholder="Enter subject name">
+                                    <?php if (!empty($field_errors['class_title'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['class_title'][0]); ?></div>
+                                    <?php endif; ?>
                                 </div>
                                 <div>
                                     <label for="class-group">Class Section Number *</label>
-                                    <input id="class-group" name="class_group" type="text" inputmode="numeric" value="<?php echo htmlspecialchars($form_values['class_group']); ?>" placeholder="Enter section number">
+                                    <input id="class-group" name="class_group" type="text" inputmode="numeric" pattern="\d+" value="<?php echo htmlspecialchars($form_values['class_group']); ?>" placeholder="Enter section number">
+                                    <?php if (!empty($field_errors['class_group'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['class_group'][0]); ?></div>
+                                    <?php endif; ?>
                                 </div>
                                 <div>
-                                    <label for="class-notes">Notes</label>
-                                    <textarea id="class-notes" name="class_notes" rows="3" placeholder="Optional notes"><?php echo htmlspecialchars($form_values['class_notes']); ?></textarea>
+                                    <label for="group-weeks-count">Number of weeks *</label>
+                                    <input
+                                        id="group-weeks-count"
+                                        name="group_weeks_count"
+                                        type="number"
+                                        min="1"
+                                        max="52"
+                                        value="<?php echo htmlspecialchars((string) ($form_values['group_weeks_count'] ?: 1)); ?>"
+                                        placeholder="e.g. 12"
+                                    >
+                                    <?php if (!empty($field_errors['group_weeks_count'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['group_weeks_count'][0]); ?></div>
+                                    <?php endif; ?>
                                 </div>
+                                <div>
+                                    <label for="group-week-one-start-date">Week 1 start date *</label>
+                                    <input
+                                        id="group-week-one-start-date"
+                                        name="group_week_one_start_date"
+                                        type="date"
+                                        min="<?php echo htmlspecialchars((new DateTime('today'))->modify('+3 days')->format('Y-m-d')); ?>"
+                                        value="<?php echo htmlspecialchars((string) ($form_values['group_week_one_start_date'] ?? '')); ?>"
+                                    >
+                                    <?php if (!empty($field_errors['group_week_one_start_date'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['group_week_one_start_date'][0]); ?></div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <div class="form-row group-booking-meta-row">
+                                <div>
+                                    <label for="class-pic">PIC (Lecturer/Instructor)*</label>
+                                    <input id="class-pic" name="class_pic" type="text" value="<?php echo htmlspecialchars($form_values['class_pic']); ?>" placeholder="Enter PIC name">
+                                    <?php if (!empty($field_errors['class_pic'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['class_pic'][0]); ?></div>
+                                    <?php endif; ?>
+                                </div>
+                                <div>
+                                    <label for="group-midsem-start-date">Mid-sem break start date</label>
+                                    <input
+                                        id="group-midsem-start-date"
+                                        name="group_midsem_start_date"
+                                        type="date"
+                                        value="<?php echo htmlspecialchars((string) ($form_values['group_midsem_start_date'] ?? '')); ?>"
+                                    >
+                                    <?php if (!empty($field_errors['group_midsem_start_date'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['group_midsem_start_date'][0]); ?></div>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <div class="group-session-builder">
+                                <div class="inline-card-header">
+                                    <div>
+                                        <h4>Weekly Sessions</h4>
+                                    </div>
+                                    <button class="btn ghost small" type="button" id="add-group-session">+ Add Weekly Session</button>
+                                </div>
+                                <div id="group-session-list" class="group-session-list"></div>
+                                <?php if (!empty($field_errors['group_sessions'])): ?>
+                                    <div class="field-error group-session-error"><?php echo htmlspecialchars($field_errors['group_sessions'][0]); ?></div>
+                                <?php endif; ?>
                             </div>
                         </div>
 
@@ -690,7 +1618,7 @@ $active = 'booking';
                             <div class="form-row">
                                 <div>
                                     <label for="full-name">Name *</label>
-                                    <input id="full-name" name="full_name" type="text" value="<?php echo htmlspecialchars($form_values['full_name']); ?>" required>
+                                    <input id="full-name" name="full_name" type="text" value="<?php echo htmlspecialchars($form_values['full_name']); ?>" <?php echo trim((string) $form_values['full_name']) !== '' ? 'readonly' : ''; ?> required>
                                 </div>
                                 <div>
                                     <label for="ic-no" id="identity-label">IC *</label>
@@ -703,16 +1631,26 @@ $active = 'booking';
                                         data-default-ic="<?php echo htmlspecialchars($user['ic_no'] ?? ''); ?>"
                                         data-default-staff-id="<?php echo htmlspecialchars($user['student_staff_id'] ?? ''); ?>"
                                         placeholder="Enter IC number"
+                                        <?php echo trim((string) $form_values['ic_no']) !== '' ? 'readonly' : ''; ?>
                                         required
                                     >
+                                    <?php if (!empty($field_errors['ic_no'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['ic_no'][0]); ?></div>
+                                    <?php endif; ?>
                                 </div>
                                 <div>
                                     <label for="email">Email *</label>
-                                    <input id="email" name="email" type="email" value="<?php echo htmlspecialchars($form_values['email']); ?>" required>
+                                    <input id="email" name="email" type="email" value="<?php echo htmlspecialchars($form_values['email']); ?>" <?php echo trim((string) $form_values['email']) !== '' ? 'readonly' : ''; ?> required>
+                                    <?php if (!empty($field_errors['email'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['email'][0]); ?></div>
+                                    <?php endif; ?>
                                 </div>
                                 <div>
                                     <label for="phone">Phone *</label>
-                                    <input id="phone" name="phone" type="text" maxlength="12" value="<?php echo htmlspecialchars($form_values['phone']); ?>" required>
+                                    <input id="phone" name="phone" type="text" inputmode="numeric" pattern="\d{9,12}" maxlength="12" value="<?php echo htmlspecialchars($form_values['phone']); ?>" <?php echo trim((string) $form_values['phone']) !== '' ? 'readonly' : ''; ?> required>
+                                    <?php if (!empty($field_errors['phone'])): ?>
+                                        <div class="field-error"><?php echo htmlspecialchars($field_errors['phone'][0]); ?></div>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -832,7 +1770,7 @@ $active = 'booking';
                                     <input type="text" value="<?php echo htmlspecialchars($booking_date ?: 'Not selected'); ?>" readonly>
                                 </div>
                                 <div>
-                                    <label>Selected slots *</label>
+                                    <label>Reference slot *</label>
                                     <input type="text" value="<?php echo htmlspecialchars($selected_time_slots ? implode(', ', $selected_time_slots) : 'Not selected'); ?>" readonly>
                                 </div>
                                 <div>
@@ -884,36 +1822,39 @@ $active = 'booking';
                             <input id="document" name="document" type="file" accept="application/pdf">
                         </div>
 
-                        <div class="form-section" id="class-schedule-section">
+                        <div class="form-section" id="group-schedule-section">
                             <div class="section-header">
                                 <div>
-                                    <h3>Class Schedule Summary</h3>
-                                    <p class="muted-text">These values come from the availability selection.</p>
+                                    <h3>Schedule Summary</h3>
+                                    <p class="muted-text">Weekly sessions are generated from the Week 1 start date, with any mid-sem break skipped automatically.</p>
                                 </div>
                             </div>
                             <div class="form-row">
                                 <div>
-                                    <label>Date</label>
-                                    <input type="text" value="<?php echo htmlspecialchars($booking_date ?: 'Not selected'); ?>" readonly>
+                                    <label>Week 1 start date *</label>
+                                    <input type="text" value="<?php echo htmlspecialchars((string) ($form_values['group_week_one_start_date'] ?: 'Not selected')); ?>" readonly>
                                 </div>
                                 <div>
-                                    <label>Selected slots *</label>
-                                    <input type="text" value="<?php echo htmlspecialchars($selected_time_slots ? implode(', ', $selected_time_slots) : 'Not selected'); ?>" readonly>
+                                    <label>Weeks *</label>
+                                    <input type="text" value="<?php echo htmlspecialchars((string) ($form_values['group_weeks_count'] ?: 1)); ?>" readonly>
                                 </div>
                                 <div>
-                                    <label>Start time *</label>
-                                    <input type="text" value="<?php echo htmlspecialchars($start_time ?: 'Not selected'); ?>" readonly>
+                                    <label>Mid-sem break</label>
+                                    <input type="text" value="<?php echo htmlspecialchars($group_midsem_display); ?>" readonly>
                                 </div>
                                 <div>
-                                    <label>End time *</label>
-                                    <input type="text" value="<?php echo htmlspecialchars($end_time ?: 'Not selected'); ?>" readonly>
+                                    <label>Mode</label>
+                                    <input type="text" value="Weekly recurring sessions" readonly>
                                 </div>
                             </div>
                         </div>
 
                         <div class="form-actions">
                             <button class="btn ghost" type="button" onclick="window.history.back()">Cancel</button>
-                            <button class="btn primary" id="reservation-submit" type="submit">Submit Reservation</button>
+                            <?php if ($is_edit_group_booking): ?>
+                                <button class="btn danger" type="submit" name="delete_group_booking" value="1" onclick="return confirm('Delete this entire group booking series?');">Delete Group Booking</button>
+                            <?php endif; ?>
+                            <button class="btn primary" id="reservation-submit" type="submit"><?php echo $is_edit_group_booking ? 'Update Group Booking' : 'Submit Reservation'; ?></button>
                         </div>
                     </form>
                 </div>
@@ -925,19 +1866,37 @@ $active = 'booking';
 
     <script>
         window.LABS_USER = <?php echo json_encode($user_payload); ?>;
+        window.LABS_GROUP_BOOKING = <?php echo json_encode([
+            'weekdays' => [
+                ['value' => 'Monday', 'label' => 'Monday'],
+                ['value' => 'Tuesday', 'label' => 'Tuesday'],
+                ['value' => 'Wednesday', 'label' => 'Wednesday'],
+                ['value' => 'Thursday', 'label' => 'Thursday'],
+                ['value' => 'Friday', 'label' => 'Friday'],
+              
+            ],
+            'defaultSession' => [
+                'booking_type' => 'lecture',
+                'day_of_week' => date('l', strtotime($group_reference_date ?: 'today')),
+                'start_time' => $start_time ?: '08:00',
+                'end_time' => $end_time ?: '10:00'
+            ],
+            'initialSessions' => $group_initial_sessions,
+            'isEdit' => $is_edit_group_booking
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
         window.LABS_LOGIN_URL = 'index.php';
     </script>
-    <script src="assets/app.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
     <script>
         (function () {
-            var bookingPurposeRadios = document.querySelectorAll('input[name="booking_purpose"]');
+            var bookingModeInput = document.getElementById('booking-mode');
             var affiliationRadios = document.querySelectorAll('input[name="affiliation_type"]');
             var publicRadios = document.querySelectorAll('input[name="public_agency_type"]');
             var labDetailsSection = document.getElementById('lab-details-section');
-            var classDetailsSection = document.getElementById('class-details-section');
+            var groupDetailsSection = document.getElementById('group-details-section');
             var affiliationSection = document.getElementById('affiliation-section');
             var labRequirementsSection = document.getElementById('lab-requirements-section');
-            var classScheduleSection = document.getElementById('class-schedule-section');
+            var groupScheduleSection = document.getElementById('group-schedule-section');
             var documentSection = document.getElementById('document-section');
             var uthmFields = document.getElementById('uthm-fields');
             var publicFields = document.getElementById('public-fields');
@@ -958,6 +1917,8 @@ $active = 'booking';
             var courseCodeField = document.getElementById('course-code');
             var classTitleField = document.getElementById('class-title');
             var classGroupField = document.getElementById('class-group');
+            var classPicField = document.getElementById('class-pic');
+            var groupWeeksCountField = document.getElementById('group-weeks-count');
             var equipmentToggle = document.querySelector('input[name="include_equipment"]');
             var chemicalsToggle = document.querySelector('input[name="include_chemicals"]');
             var equipmentSection = document.getElementById('equipment-section');
@@ -966,62 +1927,76 @@ $active = 'booking';
             var chemicalsList = document.getElementById('chemicals-list');
             var addEquipment = document.getElementById('add-equipment');
             var addChemical = document.getElementById('add-chemical');
+            var addGroupSession = document.getElementById('add-group-session');
+            var groupSessionList = document.getElementById('group-session-list');
             var submitButton = document.getElementById('reservation-submit');
+            var groupBookingData = window.LABS_GROUP_BOOKING || {};
 
-            function getBookingPurpose() {
-                var selected = document.querySelector('input[name="booking_purpose"]:checked');
-                return selected ? selected.value : 'lab';
+            function getBookingMode() {
+                if (!bookingModeInput) {
+                    return 'slot';
+                }
+                return bookingModeInput.value === 'group' ? 'group' : 'slot';
             }
 
-            function toggleBookingPurpose() {
-                var purpose = getBookingPurpose();
-                var isClass = purpose === 'class';
+            function toggleBookingMode() {
+                var mode = getBookingMode();
+                var isGroup = mode === 'group';
 
                 if (labDetailsSection) {
-                    labDetailsSection.style.display = isClass ? 'none' : 'block';
+                    labDetailsSection.style.display = isGroup ? 'none' : 'block';
                 }
-                if (classDetailsSection) {
-                    classDetailsSection.style.display = isClass ? 'block' : 'none';
+                if (groupDetailsSection) {
+                    groupDetailsSection.style.display = isGroup ? 'block' : 'none';
                 }
                 if (affiliationSection) {
-                    affiliationSection.style.display = isClass ? 'none' : 'block';
+                    affiliationSection.style.display = isGroup ? 'none' : 'block';
                 }
                 if (labRequirementsSection) {
-                    labRequirementsSection.style.display = isClass ? 'none' : 'block';
+                    labRequirementsSection.style.display = isGroup ? 'none' : 'block';
                 }
                 if (supervisorSection) {
-                    supervisorSection.style.display = isClass ? 'none' : (studentToggle && studentToggle.checked ? 'grid' : 'none');
+                    supervisorSection.style.display = isGroup ? 'none' : (studentToggle && studentToggle.checked ? 'grid' : 'none');
                 }
                 if (documentSection) {
-                    documentSection.style.display = isClass ? 'none' : 'block';
+                    documentSection.style.display = isGroup ? 'none' : 'block';
                 }
-                if (classScheduleSection) {
-                    classScheduleSection.style.display = isClass ? 'block' : 'none';
+                if (groupScheduleSection) {
+                    groupScheduleSection.style.display = isGroup ? 'block' : 'none';
+                }
+                if (groupSessionList) {
+                    groupSessionList.style.display = isGroup ? 'grid' : 'none';
                 }
 
                 if (titleField) {
-                    titleField.required = !isClass;
+                    titleField.required = !isGroup;
                 }
                 if (activityDetailsField) {
-                    activityDetailsField.required = !isClass;
+                    activityDetailsField.required = !isGroup;
                 }
                 if (courseCodeField) {
-                    courseCodeField.required = isClass;
+                    courseCodeField.required = isGroup;
                 }
                 if (classTitleField) {
-                    classTitleField.required = isClass;
+                    classTitleField.required = isGroup;
                 }
                 if (classGroupField) {
-                    classGroupField.required = isClass;
+                    classGroupField.required = isGroup;
+                }
+                if (classPicField) {
+                    classPicField.required = isGroup;
+                }
+                if (groupWeeksCountField) {
+                    groupWeeksCountField.required = isGroup;
                 }
                 if (identityLabel) {
-                    identityLabel.textContent = isClass ? 'Staff ID *' : 'IC *';
+                    identityLabel.textContent = isGroup ? 'Staff ID *' : 'IC *';
                 }
                 if (identityInput) {
                     var defaultIc = identityInput.getAttribute('data-default-ic') || '';
                     var defaultStaffId = identityInput.getAttribute('data-default-staff-id') || '';
-                    identityInput.placeholder = isClass ? 'Enter staff ID' : 'Enter IC number';
-                    if (isClass) {
+                    identityInput.placeholder = isGroup ? 'Enter staff ID' : 'Enter IC number';
+                    if (isGroup) {
                         if ((identityInput.value === '' || identityInput.value === defaultIc) && defaultStaffId !== '') {
                             identityInput.value = defaultStaffId;
                         }
@@ -1030,7 +2005,14 @@ $active = 'booking';
                     }
                 }
                 if (submitButton) {
-                    submitButton.textContent = isClass ? 'Submit Class Booking' : 'Submit Reservation';
+                    if (isGroup) {
+                        submitButton.textContent = (groupBookingData && groupBookingData.isEdit) ? 'Update Group Booking' : 'Submit Group Booking';
+                    } else {
+                        submitButton.textContent = 'Submit Reservation';
+                    }
+                }
+                if (isGroup) {
+                    ensureGroupSessionRow();
                 }
             }
 
@@ -1060,7 +2042,7 @@ $active = 'booking';
                 if (!studentToggle || !supervisorSection) {
                     return;
                 }
-                if (getBookingPurpose() === 'class') {
+                if (getBookingMode() === 'group') {
                     supervisorSection.style.display = 'none';
                     supervisorFields.forEach(function (field) {
                         if (field) {
@@ -1083,6 +2065,103 @@ $active = 'booking';
                     return;
                 }
                 section.style.display = toggle.checked ? 'grid' : 'none';
+            }
+
+            function escapeHtml(value) {
+                return String(value || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            function getGroupWeekdays() {
+                return Array.isArray(groupBookingData.weekdays) ? groupBookingData.weekdays : [
+                    { value: 'Monday', label: 'Monday' },
+                    { value: 'Tuesday', label: 'Tuesday' },
+                    { value: 'Wednesday', label: 'Wednesday' },
+                    { value: 'Thursday', label: 'Thursday' },
+                    { value: 'Friday', label: 'Friday' },
+                    { value: 'Saturday', label: 'Saturday' },
+                    { value: 'Sunday', label: 'Sunday' }
+                ];
+            }
+
+            function getGroupDefaultSession() {
+                return groupBookingData.defaultSession || {};
+            }
+
+            function getHourOptions() {
+                var options = [];
+                for (var hour = 8; hour <= 23; hour += 1) {
+                    var value = String(hour).padStart(2, '0') + ':00';
+                    var labelHour = hour % 12 === 0 ? 12 : hour % 12;
+                    var label = labelHour + (hour < 12 ? ' AM' : ' PM');
+                    options.push({ value: value, label: label });
+                }
+                return options;
+            }
+
+            function buildHourOptions(selectedValue) {
+                return getHourOptions().map(function (hourOption) {
+                    return '<option value="' + escapeHtml(hourOption.value) + '"' + (hourOption.value === selectedValue ? ' selected' : '') + '>' + escapeHtml(hourOption.label) + '</option>';
+                }).join('');
+            }
+
+            function buildWeekdayOptions(selectedValue) {
+                return getGroupWeekdays().map(function (weekday) {
+                    return '<option value="' + escapeHtml(weekday.value) + '"' + (weekday.value === selectedValue ? ' selected' : '') + '>' + escapeHtml(weekday.label) + '</option>';
+                }).join('');
+            }
+
+            function createGroupSessionRow(data) {
+                var defaults = getGroupDefaultSession();
+                var row = document.createElement('div');
+                row.className = 'group-session-row';
+                row.innerHTML =
+                    '<div>' +
+                        '<label>Session type *</label>' +
+                        '<select name="group_session_type[]">' +
+                            '<option value="lecture"' + ((data.booking_type || defaults.booking_type || 'lecture') === 'lecture' ? ' selected' : '') + '>Lecture</option>' +
+                            '<option value="lab"' + ((data.booking_type || defaults.booking_type || 'lecture') === 'lab' ? ' selected' : '') + '>Lab</option>' +
+                        '</select>' +
+                    '</div>' +
+                    '<div>' +
+                        '<label>Day *</label>' +
+                        '<select name="group_day_of_week[]">' + buildWeekdayOptions(data.day_of_week || defaults.day_of_week || 'Monday') + '</select>' +
+                    '</div>' +
+                    '<div>' +
+                        '<label>Start time *</label>' +
+                        '<select name="group_start_time[]">' + buildHourOptions(data.start_time || defaults.start_time || '09:00') + '</select>' +
+                    '</div>' +
+                    '<div>' +
+                        '<label>End time *</label>' +
+                        '<select name="group_end_time[]">' + buildHourOptions(data.end_time || defaults.end_time || '10:00') + '</select>' +
+                    '</div>' +
+                    '<button type="button" class="btn ghost small remove-row">Remove</button>';
+                row.querySelector('.remove-row').addEventListener('click', function () {
+                    if (groupSessionList && groupSessionList.children.length > 1) {
+                        row.remove();
+                    }
+                });
+                return row;
+            }
+
+            function ensureGroupSessionRow() {
+                if (!groupSessionList) {
+                    return;
+                }
+                if (groupSessionList.children.length === 0) {
+                    var initialSessions = Array.isArray(groupBookingData.initialSessions) ? groupBookingData.initialSessions : [];
+                    if (initialSessions.length > 0) {
+                        initialSessions.forEach(function (session) {
+                            groupSessionList.appendChild(createGroupSessionRow(session));
+                        });
+                    } else {
+                        groupSessionList.appendChild(createGroupSessionRow(getGroupDefaultSession()));
+                    }
+                }
             }
 
             function createEquipmentRow() {
@@ -1130,10 +2209,6 @@ $active = 'booking';
                 radio.addEventListener('change', updatePublicFields);
             });
 
-            bookingPurposeRadios.forEach(function (radio) {
-                radio.addEventListener('change', toggleBookingPurpose);
-            });
-
             if (studentToggle) {
                 studentToggle.addEventListener('change', toggleSupervisor);
             }
@@ -1168,9 +2243,18 @@ $active = 'booking';
                 });
             }
 
+            if (addGroupSession) {
+                addGroupSession.addEventListener('click', function () {
+                    if (!groupSessionList) {
+                        return;
+                    }
+                    groupSessionList.appendChild(createGroupSessionRow(getGroupDefaultSession()));
+                });
+            }
+
             updateAffiliation();
             updatePublicFields();
-            toggleBookingPurpose();
+            toggleBookingMode();
             toggleSupervisor();
             toggleInlineSection(equipmentToggle, equipmentSection);
             toggleInlineSection(chemicalsToggle, chemicalsSection);

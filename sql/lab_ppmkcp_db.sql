@@ -491,7 +491,8 @@ CREATE TABLE `users` (
   `department` varchar(255) DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-  `student_staff_id` varchar(50) DEFAULT NULL
+  `student_staff_id` varchar(50) DEFAULT NULL,
+  `notify_email` tinyint(1) NOT NULL DEFAULT 1
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --

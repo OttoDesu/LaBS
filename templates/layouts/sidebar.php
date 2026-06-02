@@ -51,11 +51,11 @@ $links = $layout['links'] ?? [];
                 </a>
             <?php endif; ?>
         <?php endforeach; ?>
+        <div class="sidebar-card">
+            <h3>LaBS PPMKCP</h3>
+            <p>Pejabat Pengurusan Makmal Kampus Cawangan Pagoh</p>
+            <p>Telefon: 06-974 2116</p>
+            <p>Email: ppmkcp@uthm.edu.my</p>
+        </div>
     </nav>
-    <div class="sidebar-card">
-        <h3>LaBS PPMKCP</h3>
-        <p>Pejabat Pengurusan Makmal Kampus Cawangan Pagoh</p>
-        <p>Telefon: 06-974 2116</p>
-        <p>Email: ppmkcp@uthm.edu.my</p>
-    </div>
 </aside>

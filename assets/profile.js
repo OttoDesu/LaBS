@@ -3,6 +3,7 @@
     var editButton = document.getElementById('edit-profile');
     var form = document.getElementById('profile-form');
     var errorEl = document.getElementById('profile-error');
+    var successEl = document.getElementById('profile-success');
     var ptjOptions = [
         'Pejabat Naib Canselor',
         'Pejabat Timbalan Naib Canselor (Akademik dan Antarabangsa)',
@@ -113,6 +114,10 @@
                         }
                     }
                     document.getElementById('form-phone').value = data.user.phone || '';
+                    var notifyEmailInput = document.getElementById('form-notify-email');
+                    if (notifyEmailInput) {
+                        notifyEmailInput.checked = !!Number(data.user.notify_email || 0);
+                    }
                     populatePusatTanggungJawab(data.user.organization || '');
                 }
             });
@@ -122,6 +127,9 @@
         editButton.addEventListener('click', function () {
             if (errorEl) {
                 errorEl.hidden = true;
+            }
+            if (successEl) {
+                successEl.hidden = true;
             }
             openModal(modalEl);
         });
@@ -150,7 +158,13 @@
                             errorEl.textContent = (data.errors || ['Unable to update profile.']).join(' ');
                             errorEl.hidden = false;
                         }
+                        if (successEl) {
+                            successEl.hidden = true;
+                        }
                         return;
+                    }
+                    if (successEl) {
+                        successEl.hidden = true;
                     }
                     closeModal(modalEl);
                     loadProfile();

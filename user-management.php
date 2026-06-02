@@ -6,9 +6,10 @@ $user_type = $_SESSION['user_type'] ?? 'public';
 require_management();
 $admin_cluster_id = get_admin_cluster_id();
 $is_super_admin = is_super_admin($user_type);
+$is_cluster_admin = is_cluster_admin($user_type);
 $is_lab_supervisor = is_lab_supervisor($user_type);
 $can_manage_users = !$is_lab_supervisor;
-$show_action_column = !$is_super_admin;
+$show_action_column = !$is_super_admin && !$is_cluster_admin;
 $session_user_id = (int) ($_SESSION['user_id'] ?? 0);
 
 $search = trim($_GET['search'] ?? '');
@@ -493,7 +494,7 @@ $active = 'user-management';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>User Management</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.css') ?: time()); ?>">
 </head>
 <body data-login-url="index.php">
     <div class="app">
@@ -843,7 +844,7 @@ $active = 'user-management';
         window.LABS_LOGIN_URL = 'index.php';
         window.LABS_SHOW_ADD_USER = <?php echo $show_add_modal ? 'true' : 'false'; ?>;
     </script>
-    <script src="assets/app.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
     <?php if ($can_manage_users): ?>
         <script src="assets/user-management.js"></script>
     <?php endif; ?>

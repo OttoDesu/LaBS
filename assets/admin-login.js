@@ -18,8 +18,8 @@
         el.style.display = message ? 'block' : 'none';
     }
 
-    function isUthmStaff(email) {
-        return /^[a-z0-9._%+-]+@uthm\.edu\.my$/i.test(email);
+    function isValidEmail(email) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     }
 
     toggleButtons.forEach(function (button) {
@@ -40,15 +40,15 @@
 
         if (!email) {
             setError('admin-email-error', 'Admin email is required.');
-        } else if (!isUthmStaff(email)) {
-            setError('admin-email-error', 'Use name@uthm.edu.my.');
+        } else if (!isValidEmail(email)) {
+            setError('admin-email-error', 'Use a valid email address.');
         } else {
             setError('admin-email-error', '');
         }
 
         setError('admin-password-error', password ? '' : 'Password is required.');
 
-        submitButton.disabled = !(isUthmStaff(email) && password);
+        submitButton.disabled = !(isValidEmail(email) && password);
     }
 
     form.addEventListener('input', validateForm);

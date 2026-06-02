@@ -1,16 +1,18 @@
 <?php
 require_once __DIR__ . '/init.php';
 require_login();
-require_super_admin();
+require_management();
 
+$user_id = (int) ($_SESSION['user_id'] ?? 0);
 $user_name = $_SESSION['user_name'] ?? 'User';
 $user_email = $_SESSION['user_email'] ?? '';
 $user_type = $_SESSION['user_type'] ?? 'public';
+$is_super_admin = is_super_admin($user_type);
+$is_cluster_admin = is_cluster_admin($user_type);
+$is_lab_supervisor = is_lab_supervisor($user_type);
 $flash_info = get_flash('info');
 $flash_error = get_flash('error');
 
-$report_years = [];
-$report_clusters = [];
 $report_months = [
     1 => 'January',
     2 => 'February',
@@ -26,41 +28,159 @@ $report_months = [
     12 => 'December'
 ];
 
-$year_result = $mysqli->query('
+$report_clusters = [];
+$report_labs = [];
+$report_years = [];
+$locked_cluster_id = null;
+$role_badge = 'Report Analytics';
+$role_heading = 'Booking analytics by year, month, week, or specific date';
+$role_description = 'Loaded with AJAX without refreshing the page';
+
+if ($is_super_admin) {
+    $role_badge = 'Super Admin Report';
+} elseif ($is_cluster_admin) {
+    $role_badge = 'Cluster Admin Report';
+    $role_description = 'Report is limited to your assigned cluster.';
+} elseif ($is_lab_supervisor) {
+    $role_badge = 'Lab Supervisor Report';
+    $role_description = 'Report is limited to labs under your supervision.';
+}
+
+if ($is_cluster_admin) {
+    $locked_cluster_id = (int) (get_admin_cluster_id() ?? 0);
+    if ($locked_cluster_id > 0) {
+        $stmt = $mysqli->prepare('SELECT cluster_id, cluster_name FROM clusters WHERE cluster_id = ? LIMIT 1');
+        $stmt->bind_param('i', $locked_cluster_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if ($row = $result->fetch_assoc()) {
+            $report_clusters[] = [
+                'cluster_id' => (int) $row['cluster_id'],
+                'cluster_name' => (string) $row['cluster_name']
+            ];
+        }
+        $stmt->close();
+
+        $stmt = $mysqli->prepare('SELECT lab_id, lab_name FROM labs WHERE cluster_id = ? ORDER BY lab_name ASC');
+        $stmt->bind_param('i', $locked_cluster_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) {
+            $report_labs[] = [
+                'lab_id' => (int) $row['lab_id'],
+                'lab_name' => (string) $row['lab_name']
+            ];
+        }
+        $stmt->close();
+    }
+} elseif ($is_lab_supervisor) {
+    $assigned_lab_ids = get_lab_supervisor_lab_ids($mysqli, $user_id);
+    if ($assigned_lab_ids) {
+        $placeholders = implode(',', array_fill(0, count($assigned_lab_ids), '?'));
+        $types = str_repeat('i', count($assigned_lab_ids));
+        $stmt = $mysqli->prepare("
+            SELECT l.lab_id, l.lab_name, c.cluster_id, c.cluster_name
+            FROM labs l
+            JOIN clusters c ON c.cluster_id = l.cluster_id
+            WHERE l.lab_id IN ($placeholders)
+            ORDER BY c.cluster_name ASC, l.lab_name ASC
+        ");
+        $stmt->bind_param($types, ...$assigned_lab_ids);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $cluster_map = [];
+        while ($row = $result->fetch_assoc()) {
+            $cluster_map[(int) $row['cluster_id']] = [
+                'cluster_id' => (int) $row['cluster_id'],
+                'cluster_name' => (string) $row['cluster_name']
+            ];
+            $report_labs[] = [
+                'lab_id' => (int) $row['lab_id'],
+                'lab_name' => (string) $row['lab_name']
+            ];
+        }
+        $stmt->close();
+        $report_clusters = array_values($cluster_map);
+    }
+} else {
+    $cluster_result = $mysqli->query('SELECT cluster_id, cluster_name FROM clusters ORDER BY cluster_name ASC');
+    if ($cluster_result) {
+        while ($row = $cluster_result->fetch_assoc()) {
+            $report_clusters[] = [
+                'cluster_id' => (int) $row['cluster_id'],
+                'cluster_name' => (string) $row['cluster_name']
+            ];
+        }
+    }
+}
+
+$year_sql = '
     SELECT DISTINCT YEAR(lb.booking_date) AS booking_year
     FROM lab_bookings lb
+    JOIN labs l ON l.lab_id = lb.lab_id
     WHERE lb.booking_date IS NOT NULL
-    ORDER BY booking_year DESC
-');
-if ($year_result) {
-    while ($row = $year_result->fetch_assoc()) {
+';
+$year_types = '';
+$year_params = [];
+
+if ($is_cluster_admin && $locked_cluster_id) {
+    $year_sql .= ' AND l.cluster_id = ?';
+    $year_types .= 'i';
+    $year_params[] = $locked_cluster_id;
+} elseif ($is_lab_supervisor) {
+    $assigned_lab_ids = get_lab_supervisor_lab_ids($mysqli, $user_id);
+    if ($assigned_lab_ids) {
+        $year_sql .= ' AND l.lab_id IN (' . implode(',', array_fill(0, count($assigned_lab_ids), '?')) . ')';
+        $year_types .= str_repeat('i', count($assigned_lab_ids));
+        foreach ($assigned_lab_ids as $assigned_lab_id) {
+            $year_params[] = (int) $assigned_lab_id;
+        }
+    } else {
+        $year_sql .= ' AND 1 = 0';
+    }
+}
+$year_sql .= ' ORDER BY booking_year DESC';
+
+if ($year_types !== '') {
+    $stmt = $mysqli->prepare($year_sql);
+    $stmt->bind_param($year_types, ...$year_params);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row = $result->fetch_assoc()) {
         $year = (int) ($row['booking_year'] ?? 0);
         if ($year > 0) {
             $report_years[] = $year;
         }
     }
+    $stmt->close();
+} else {
+    $year_result = $mysqli->query($year_sql);
+    if ($year_result) {
+        while ($row = $year_result->fetch_assoc()) {
+            $year = (int) ($row['booking_year'] ?? 0);
+            if ($year > 0) {
+                $report_years[] = $year;
+            }
+        }
+    }
 }
+
 if (!$report_years) {
     $report_years[] = (int) date('Y');
 }
 
-$cluster_result = $mysqli->query('SELECT cluster_id, cluster_name FROM clusters ORDER BY cluster_name ASC');
-if ($cluster_result) {
-    while ($row = $cluster_result->fetch_assoc()) {
-        $report_clusters[] = [
-            'cluster_id' => (int) $row['cluster_id'],
-            'cluster_name' => $row['cluster_name']
-        ];
-    }
+$layout_path = __DIR__ . '/templates/layouts/admin.php';
+if ($is_lab_supervisor) {
+    $layout_path = __DIR__ . '/templates/layouts/lab_supervisor.php';
 }
-
-$layout = require __DIR__ . '/templates/layouts/admin.php';
-$active = 'report-analytics';
+$layout = require $layout_path;
+$active = ($is_cluster_admin || $is_lab_supervisor) ? 'dashboard' : 'report-analytics';
 $user_payload = [
     'name' => $user_name,
     'email' => $user_email,
     'userType' => $user_type
 ];
+$cluster_select_disabled = $is_cluster_admin || (count($report_clusters) <= 1 && !$is_super_admin);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -99,8 +219,8 @@ $user_payload = [
                     </button>
                     <div class="user-chip" id="user-menu-toggle" role="button" tabindex="0">
                         <div>
-                            <div class="user-name" id="user-name"><?php echo htmlspecialchars($user_name); ?></div>
-                            <div class="user-email" id="user-email"><?php echo htmlspecialchars($user_email); ?></div>
+                            <div class="user-name"><?php echo htmlspecialchars($user_name); ?></div>
+                            <div class="user-email"><?php echo htmlspecialchars($user_email); ?></div>
                         </div>
                         <span class="chevron"><svg class="chevron-icon" width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 8L10 13L15 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                     </div>
@@ -109,10 +229,9 @@ $user_payload = [
                             <div class="user-name"><?php echo htmlspecialchars($user_name); ?></div>
                             <div class="user-email"><?php echo htmlspecialchars($user_email); ?></div>
                         </div>
-                        <a class="menu-item" href="profile.php"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="menu-icon"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3.5C7.30558 3.5 3.5 7.30558 3.5 12C3.5 14.1526 4.3002 16.1184 5.61936 17.616C6.17279 15.3096 8.24852 13.5955 10.7246 13.5955H13.2746C15.7509 13.5955 17.8268 15.31 18.38 17.6167C19.6996 16.119 20.5 14.153 20.5 12C20.5 7.30558 16.6944 3.5 12 3.5ZM17.0246 18.8566V18.8455C17.0246 16.7744 15.3457 15.0955 13.2746 15.0955H10.7246C8.65354 15.0955 6.97461 16.7744 6.97461 18.8455V18.856C8.38223 19.8895 10.1198 20.5 12 20.5C13.8798 20.5 15.6171 19.8898 17.0246 18.8566ZM2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12ZM11.9991 7.25C10.8847 7.25 9.98126 8.15342 9.98126 9.26784C9.98126 10.3823 10.8847 11.2857 11.9991 11.2857C13.1135 11.2857 14.0169 10.3823 14.0169 9.26784C14.0169 8.15342 13.1135 7.25 11.9991 7.25ZM8.48126 9.26784C8.48126 7.32499 10.0563 5.75 11.9991 5.75C13.9419 5.75 15.5169 7.32499 15.5169 9.26784C15.5169 11.2107 13.9419 12.7857 11.9991 12.7857C10.0563 12.7857 8.48126 11.2107 8.48126 9.26784Z" fill="currentColor"/></svg>Edit Profile</a>
-                        <button class="menu-item" type="button"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="menu-icon"><path fill-rule="evenodd" clip-rule="evenodd" d="M3.5 12C3.5 7.30558 7.30558 3.5 12 3.5C16.6944 3.5 20.5 7.30558 20.5 12C20.5 16.6944 16.6944 20.5 12 20.5C7.30558 20.5 3.5 16.6944 3.5 12ZM12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2ZM11.0991 7.52507C11.0991 8.02213 11.5021 8.42507 11.9991 8.42507H12.0001C12.4972 8.42507 12.9001 8.02213 12.9001 7.52507C12.9001 7.02802 12.4972 6.62507 12.0001 6.62507H11.9991C11.5021 6.62507 11.0991 7.02802 11.0991 7.52507ZM12.0001 17.3714C11.5859 17.3714 11.2501 17.0356 11.2501 16.6214V10.9449C11.2501 10.5307 11.5859 10.1949 12.0001 10.1949C12.4143 10.1949 12.7501 10.5307 12.7501 10.9449V16.6214C12.7501 17.0356 12.4143 17.3714 12.0001 17.3714Z" fill="currentColor"/></svg>Support</button>
+                        <a class="menu-item" href="profile.php">Edit Profile</a>
                         <form method="POST" action="logout.php">
-                            <button class="menu-item danger" type="submit"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="menu-icon"><path fill-rule="evenodd" clip-rule="evenodd" d="M15.1007 19.247C14.6865 19.247 14.3507 18.9112 14.3507 18.497L14.3507 14.245H12.8507V18.497C12.8507 19.7396 13.8581 20.747 15.1007 20.747H18.5007C19.7434 20.747 20.7507 19.7396 20.7507 18.497L20.7507 5.49609C20.7507 4.25345 19.7433 3.24609 18.5007 3.24609H15.1007C13.8581 3.24609 12.8507 4.25345 12.8507 5.49609V9.74501L14.3507 9.74501V5.49609C14.3507 5.08188 14.6865 4.74609 15.1007 4.74609L18.5007 4.74609C18.9149 4.74609 19.2507 5.08188 19.2507 5.49609L19.2507 18.497C19.2507 18.9112 18.9149 19.247 18.5007 19.247H15.1007ZM3.25073 11.9984C3.25073 12.2144 3.34204 12.4091 3.48817 12.546L8.09483 17.1556C8.38763 17.4485 8.86251 17.4487 9.15549 17.1559C9.44848 16.8631 9.44863 16.3882 9.15583 16.0952L5.81116 12.7484L16.0007 12.7484C16.4149 12.7484 16.7507 12.4127 16.7507 11.9984C16.7507 11.5842 16.4149 11.2484 16.0007 11.2484L5.81528 11.2484L9.15585 7.90554C9.44864 7.61255 9.44847 7.13767 9.15547 6.84488C8.86248 6.55209 8.3876 6.55226 8.09481 6.84525L3.52309 11.4202C3.35673 11.5577 3.25073 11.7657 3.25073 11.9984Z" fill="currentColor"/></svg>Sign Out</button>
+                            <button class="menu-item danger" type="submit">Sign Out</button>
                         </form>
                     </div>
                 </div>
@@ -129,7 +248,7 @@ $user_payload = [
                 <div class="content-header">
                     <div>
                         <h1>Report Analytics</h1>
-                        <p>Analyze bookings by year, month, week, cluster, and lab.</p>
+                        <p>Analyze bookings based on your reporting scope.</p>
                     </div>
                     <div class="breadcrumb">Home / Report Analytics</div>
                 </div>
@@ -137,10 +256,10 @@ $user_payload = [
                 <div class="card report-filter-card" id="report-analytics">
                     <div class="chart-header">
                         <div>
-                            <p class="badge">Super Admin Report</p>
-                            <h3>Booking analytics by year, month, week, or specific date</h3>
+                            <p class="badge"><?php echo htmlspecialchars($role_badge); ?></p>
+                            <h3><?php echo htmlspecialchars($role_heading); ?></h3>
                         </div>
-                        <span class="muted-text">Loaded with AJAX without refreshing the page</span>
+                        <span class="muted-text"><?php echo htmlspecialchars($role_description); ?></span>
                     </div>
                     <form class="filters report-filters" id="super-admin-report-form">
                         <select name="filter_type" id="report-filter-type">
@@ -164,14 +283,17 @@ $user_payload = [
                             <input type="date" name="start_date" id="report-start-date" value="<?php echo htmlspecialchars(date('Y-m-d')); ?>">
                             <input type="date" name="end_date" id="report-end-date" value="<?php echo htmlspecialchars(date('Y-m-d')); ?>">
                         </div>
-                        <select name="cluster_id" id="report-cluster">
+                        <select name="cluster_id" id="report-cluster" <?php echo $cluster_select_disabled ? 'disabled' : ''; ?>>
                             <option value="">All clusters</option>
                             <?php foreach ($report_clusters as $cluster): ?>
-                                <option value="<?php echo (int) $cluster['cluster_id']; ?>"><?php echo htmlspecialchars($cluster['cluster_name']); ?></option>
+                                <option value="<?php echo (int) $cluster['cluster_id']; ?>"<?php echo $locked_cluster_id !== null && (int) $cluster['cluster_id'] === (int) $locked_cluster_id ? ' selected' : ''; ?>><?php echo htmlspecialchars($cluster['cluster_name']); ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <select name="lab_id" id="report-lab" disabled>
+                        <select name="lab_id" id="report-lab" <?php echo $report_labs ? '' : 'disabled'; ?>>
                             <option value="">All labs</option>
+                            <?php foreach ($report_labs as $lab): ?>
+                                <option value="<?php echo (int) $lab['lab_id']; ?>"><?php echo htmlspecialchars($lab['lab_name']); ?></option>
+                            <?php endforeach; ?>
                         </select>
                         <button class="btn primary" type="submit" id="report-submit">Generate Report</button>
                     </form>
@@ -185,26 +307,10 @@ $user_payload = [
                 <div id="report-error" class="alert alert-error" hidden></div>
 
                 <div class="stats-grid" id="report-summary-cards">
-                    <div class="card stat-card">
-                        <p class="stat-label">Total Bookings</p>
-                        <h2 class="stat-value">-</h2>
-                        <span class="stat-meta">Waiting for report</span>
-                    </div>
-                    <div class="card stat-card">
-                        <p class="stat-label">Unique Users</p>
-                        <h2 class="stat-value">-</h2>
-                        <span class="stat-meta">Waiting for report</span>
-                    </div>
-                    <div class="card stat-card">
-                        <p class="stat-label">Total Hours</p>
-                        <h2 class="stat-value">-</h2>
-                        <span class="stat-meta">Waiting for report</span>
-                    </div>
-                    <div class="card stat-card">
-                        <p class="stat-label">Average Hours</p>
-                        <h2 class="stat-value">-</h2>
-                        <span class="stat-meta">Waiting for report</span>
-                    </div>
+                    <div class="card stat-card"><p class="stat-label">Total Bookings</p><h2 class="stat-value">-</h2><span class="stat-meta">Waiting for report</span></div>
+                    <div class="card stat-card"><p class="stat-label">Unique Users</p><h2 class="stat-value">-</h2><span class="stat-meta">Waiting for report</span></div>
+                    <div class="card stat-card"><p class="stat-label">Total Hours</p><h2 class="stat-value">-</h2><span class="stat-meta">Waiting for report</span></div>
+                    <div class="card stat-card"><p class="stat-label">Average Hours</p><h2 class="stat-value">-</h2><span class="stat-meta">Waiting for report</span></div>
                 </div>
 
                 <div class="report-visual-grid">
@@ -220,9 +326,7 @@ $user_payload = [
                                 <button class="btn ghost small report-export" type="button" data-chart-target="report-bar-chart" data-export-format="pdf">Export PDF</button>
                             </div>
                         </div>
-                        <div id="report-bar-chart" class="report-chart-body">
-                            <div class="empty-state">Report data will appear here after you submit a filter.</div>
-                        </div>
+                        <div id="report-bar-chart" class="report-chart-body"><div class="empty-state">Report data will appear here after you submit a filter.</div></div>
                     </div>
                     <div class="card chart-card">
                         <div class="chart-header">
@@ -235,9 +339,7 @@ $user_payload = [
                                 <button class="btn ghost small report-export" type="button" data-chart-target="report-pie-chart" data-export-format="pdf">Export PDF</button>
                             </div>
                         </div>
-                        <div id="report-pie-chart" class="report-chart-body">
-                            <div class="empty-state">Report data will appear here after you submit a filter.</div>
-                        </div>
+                        <div id="report-pie-chart" class="report-chart-body"><div class="empty-state">Report data will appear here after you submit a filter.</div></div>
                     </div>
                 </div>
 
@@ -247,14 +349,26 @@ $user_payload = [
                             <p class="badge">Report Table</p>
                             <h3>Booking records</h3>
                         </div>
-                        <span class="muted-text" id="report-table-meta">No data yet</span>
+                        <div class="report-table-tools">
+                            <label class="report-page-size-control">
+                                <span>Show</span>
+                                <select id="report-page-size" aria-label="Report rows per page">
+                                    <option value="10" selected>10</option>
+                                    <option value="25">25</option>
+                                    <option value="50">50</option>
+                                    <option value="all">All</option>
+                                </select>
+                            </label>
+                            <span class="muted-text" id="report-table-meta">No data yet</span>
+                        </div>
                     </div>
                     <div class="table-wrapper" id="report-table-wrapper">
                         <div class="empty-state">Report data will appear here after you submit a filter.</div>
                     </div>
+                    <div class="pagination report-table-pagination" id="report-table-pagination" hidden></div>
                 </div>
 
-                <footer class="footer">Â© Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">© Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>
@@ -268,7 +382,10 @@ $user_payload = [
             'endpoint' => 'super-admin-report-api.php',
             'years' => $report_years,
             'defaultYear' => (int) ($report_years[0] ?? date('Y')),
-            'defaultMonth' => (int) date('n')
+            'defaultMonth' => (int) date('n'),
+            'roleScope' => $is_super_admin ? 'super_admin' : ($is_cluster_admin ? 'cluster_admin' : 'lab_supervisor'),
+            'lockedClusterId' => $locked_cluster_id,
+            'initialLabs' => $report_labs
         ]); ?>;
     </script>
     <script src="assets/app.js?v=<?php echo (int) filemtime(__DIR__ . '/assets/app.js'); ?>"></script>

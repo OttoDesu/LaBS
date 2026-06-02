@@ -60,11 +60,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'reject_booking') {
         $booking_id = (int) ($_POST['booking_id'] ?? 0);
         $rejection_reason = trim($_POST['rejection_reason'] ?? '');
+        $booking_target = null;
         if ($booking_id <= 0) {
             $errors[] = 'Invalid booking selected.';
         }
         if ($rejection_reason === '') {
             $errors[] = 'Rejection reason is required.';
+        }
+        if (!$errors) {
+            $target_stmt = $mysqli->prepare('
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.user_id, lb.booking_date, lb.time_slot, l.lab_id, l.cluster_id, l.lab_name
+                FROM lab_bookings lb
+                JOIN labs l ON l.lab_id = lb.lab_id
+                WHERE lb.' . $booking_pk . ' = ?
+                LIMIT 1
+            ');
+            if ($target_stmt) {
+                $target_stmt->bind_param('i', $booking_id);
+                $target_stmt->execute();
+                $target_result = $target_stmt->get_result();
+                $booking_target = $target_result ? $target_result->fetch_assoc() : null;
+                $target_stmt->close();
+            }
         }
         if (!$errors) {
             if ($is_super_admin) {
@@ -101,6 +118,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute();
                 if ($stmt->affected_rows > 0) {
                     $stmt->close();
+                    if ($booking_target && (int) ($booking_target['user_id'] ?? 0) > 0) {
+                        create_and_send_user_notification(
+                            $mysqli,
+                            (int) $booking_target['user_id'],
+                            'Booking rejected',
+                            ($booking_target['lab_name'] ?? 'Your booking') . ' on ' . ($booking_target['booking_date'] ?? 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was rejected. Reason: ' . $rejection_reason,
+                            'danger',
+                            'dashboard.php',
+                            true
+                        );
+                    }
+                    if ($booking_target) {
+                        $management_recipient_ids = get_cluster_admin_user_ids(
+                            $mysqli,
+                            (int) ($booking_target['cluster_id'] ?? 0)
+                        );
+                        $management_recipient_ids = array_values(array_filter(
+                            array_unique(array_map('intval', $management_recipient_ids)),
+                            static function ($recipient_id) use ($booking_target) {
+                                $excluded = [
+                                    (int) ($booking_target['user_id'] ?? 0),
+                                    (int) ($_SESSION['user_id'] ?? 0)
+                                ];
+                                return !in_array((int) $recipient_id, $excluded, true);
+                            }
+                        ));
+                        if ($management_recipient_ids) {
+                            create_and_send_bulk_user_notifications(
+                                $mysqli,
+                                $management_recipient_ids,
+                                'Booking rejected in your cluster',
+                                ($booking_target['lab_name'] ?? 'A booking') . ' on ' . ($booking_target['booking_date'] ?? 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was rejected. Reason: ' . $rejection_reason,
+                                'warning',
+                                'booking-management.php',
+                                true
+                            );
+                        }
+                    }
                     set_flash('info', 'Booking rejected successfully.');
                     header('Location: booking-management.php');
                     exit;
@@ -284,9 +339,9 @@ $active = 'booking-management';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Booking Management</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.css') ?: time()); ?>">
 </head>
-<body data-login-url="index.php">
+<body class="page-booking-management<?php echo $is_lab_supervisor ? ' role-lab-supervisor' : ''; ?>" data-login-url="index.php">
     <div class="app">
         <?php include __DIR__ . '/templates/layouts/sidebar.php'; ?>
 
@@ -353,7 +408,6 @@ $active = 'booking-management';
                 <div class="content-header">
                     <div>
                         <h1>Booking Management</h1>
-                        <p>Review and manage lab booking requests.</p>
                     </div>
                     <div class="breadcrumb">Home / Booking Management</div>
                 </div>
@@ -372,8 +426,8 @@ $active = 'booking-management';
                     </div>
                 <?php endif; ?>
 
-                <div class="card">
-                    <form class="filters" method="GET" action="booking-management.php">
+                <div class="card booking-management-card">
+                    <form class="filters management-filters" method="GET" action="booking-management.php">
                         <input type="text" name="search" placeholder="Search by user, lab, or booking ID" value="<?php echo htmlspecialchars($search); ?>">
                         <?php if ($is_super_admin): ?>
                             <select name="cluster">
@@ -424,21 +478,22 @@ $active = 'booking-management';
                                     }
                                     ?>
                                     <tr>
-                                        <td><?php echo (int) ((($booking_pagination['current_page'] - 1) * $booking_pagination['per_page']) + $index + 1); ?></td>
-                                        <td><?php echo (int) $booking['booking_id']; ?></td>
-                                        <td>
+                                        <td data-label="#"><?php echo (int) ((($booking_pagination['current_page'] - 1) * $booking_pagination['per_page']) + $index + 1); ?></td>
+                                        <td data-label="Booking ID"><?php echo (int) $booking['booking_id']; ?></td>
+                                        <td data-label="User">
                                             <div><?php echo htmlspecialchars($booking['user_name']); ?></div>
                                             <div class="muted-text"><?php echo htmlspecialchars($booking['user_email']); ?></div>
                                         </td>
-                                        <td><?php echo htmlspecialchars($booking['lab_name']); ?></td>
+                                        <td data-label="Lab"><?php echo htmlspecialchars($booking['lab_name']); ?></td>
                                         <?php if ($is_super_admin): ?>
-                                            <td><?php echo htmlspecialchars($booking['cluster_name'] ?? '-'); ?></td>
+                                            <td data-label="Cluster"><?php echo htmlspecialchars($booking['cluster_name'] ?? '-'); ?></td>
                                         <?php endif; ?>
-                                        <td><?php echo htmlspecialchars($booking['booking_date']); ?></td>
-                                        <td><?php echo htmlspecialchars($booking['time_slot']); ?></td>
-                                        <td><span class="status <?php echo htmlspecialchars($booking['status']); ?>"><?php echo htmlspecialchars(get_booking_status_label($booking['status'] ?? '')); ?></span></td>
-                                        <td><?php echo htmlspecialchars($note); ?></td>
-                                        <td>
+                                        <td data-label="Date"><?php echo htmlspecialchars($booking['booking_date']); ?></td>
+                                        <td data-label="Time Slot"><?php echo htmlspecialchars($booking['time_slot']); ?></td>
+                                        <td data-label="Status"><span class="status <?php echo htmlspecialchars($booking['status']); ?>"><?php echo htmlspecialchars(get_booking_status_label($booking['status'] ?? '')); ?></span></td>
+                                        <td data-label="Notes"><?php echo htmlspecialchars($note); ?></td>
+                                        <td data-label="Action">
+                                            <div class="action-buttons">
                                             <a class="btn ghost" href="booking-details.php?booking_id=<?php echo (int) $booking['booking_id']; ?>">View</a>
                                             <?php if ($booking['status'] === 'Approved'): ?>
                                                 <button
@@ -452,6 +507,7 @@ $active = 'booking-management';
                                             <?php else: ?>
                                                 <span class="muted-text"> </span>
                                             <?php endif; ?>
+                                            </div>
                                         </td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -529,6 +585,6 @@ $active = 'booking-management';
             });
         })();
     </script>
-    <script src="assets/app.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
 </body>
 </html>

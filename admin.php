@@ -13,8 +13,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = trim($_POST['email'] ?? '');
     $password = $_POST['password'] ?? '';
 
-    if (!is_uthm_staff_email($email)) {
-        $errors[] = 'Admin email must be in the format name@uthm.edu.my.';
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errors[] = 'Valid admin email is required.';
     }
     if ($password === '') {
         $errors[] = 'Password is required.';
@@ -28,7 +28,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $user = $result->fetch_assoc();
         $stmt->close();
 
-        if (!$user || !password_verify($password, $user['password'])) {
+        if ($user && $user['user_type'] !== 'lab_supervisor' && !is_uthm_staff_email($email)) {
+            $errors[] = 'Admin accounts must use name@uthm.edu.my. Lab Supervisor may use another valid email.';
+        } elseif (!$user || !password_verify($password, $user['password'])) {
             $errors[] = 'Invalid admin email or password.';
         } else {
             $_SESSION['user_id'] = $user['id'];
@@ -48,14 +50,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Sign In</title>
-    <link rel="stylesheet" href="assets/style.css">
+    <link rel="stylesheet" href="assets/style.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/style.css') ?: time()); ?>">
 </head>
 <body>
     <div class="split">
         <div class="split-left">
             <div class="card">
                 <h1>Admin Sign In</h1>
-                <p class="subtitle">Enter your admin email and password to sign in.</p>
+                <p class="subtitle">Enter your admin email and password to sign in. Lab Supervisor may use any valid email; other admin roles must use @uthm.edu.my.</p>
 
                 <?php if ($errors): ?>
                     <div class="alert alert-error">
@@ -69,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <div class="field-group">
                         <div class="error" id="admin-email-error"></div>
                         <label for="email">Admin Email<span class="required">*</span></label>
-                        <input type="email" id="email" name="email" placeholder="xxx@uthm.edu.my" value="<?php echo htmlspecialchars($email); ?>" required>
+                        <input type="email" id="email" name="email" placeholder="name@uthm.edu.my or supervisor@gmail.com" value="<?php echo htmlspecialchars($email); ?>" required>
                     </div>
 
                     <div class="field-group">
@@ -86,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <input type="checkbox" checked disabled>
                             <span>Admin access</span>
                         </label>
-                        <a class="link" href="#">Forgot password?</a>
+                        <a class="link" href="forgot-password.php">Forgot password?</a>
                     </div>
 
                     <button type="submit" id="admin-submit" class="primary">Sign In as Admin</button>
@@ -101,6 +103,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <img src="img/labs_logo.png" alt="LaBS PPMKCP" class="hero-logo">
         </div>
     </div>
-    <script src="assets/admin-login.js"></script>
+    <script src="assets/admin-login.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/admin-login.js') ?: time()); ?>"></script>
 </body>
 </html>

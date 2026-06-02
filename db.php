@@ -4,7 +4,6 @@ $DB_USER = 'root';
 $DB_PASS = '';
 
 $preferred_databases = [
-    'lab_booking_system',
     'lab_ppmkcp_db'
 ];
 

@@ -45,11 +45,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'cancel_booking' && !$is_management) {
         $booking_id = (int) ($_POST['booking_id'] ?? 0);
         $cancellation_reason = trim($_POST['cancellation_reason'] ?? '');
+        $booking_target = null;
         if ($booking_id <= 0) {
             $errors[] = 'Invalid booking selected.';
         }
         if ($cancellation_reason === '') {
             $errors[] = 'Cancellation reason is required.';
+        }
+        if (!$errors) {
+            $target_stmt = $mysqli->prepare('
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.user_id, lb.booking_date, lb.time_slot, l.lab_id, l.cluster_id, l.lab_name
+                FROM lab_bookings lb
+                JOIN labs l ON l.lab_id = lb.lab_id
+                WHERE lb.' . $booking_pk . ' = ? AND lb.user_id = ?
+                LIMIT 1
+            ');
+            if ($target_stmt) {
+                $target_stmt->bind_param('ii', $booking_id, $user_id);
+                $target_stmt->execute();
+                $target_result = $target_stmt->get_result();
+                $booking_target = $target_result ? $target_result->fetch_assoc() : null;
+                $target_stmt->close();
+            }
         }
         if (!$errors) {
             $stmt = $mysqli->prepare("
@@ -61,6 +78,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute();
             if ($stmt->affected_rows > 0) {
                 $stmt->close();
+                if ($booking_target) {
+                    $management_recipient_ids = get_lab_notification_recipient_user_ids(
+                        $mysqli,
+                        (int) ($booking_target['lab_id'] ?? 0),
+                        (int) ($booking_target['cluster_id'] ?? 0),
+                        array_filter([
+                            (int) ($booking_target['user_id'] ?? 0)
+                        ])
+                    );
+                    if ($management_recipient_ids) {
+                        create_and_send_bulk_user_notifications(
+                            $mysqli,
+                            $management_recipient_ids,
+                            'Booking cancelled for your lab',
+                            ($booking_target['lab_name'] ?? 'A booking') . ' on ' . ($booking_target['booking_date'] ?? 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was cancelled by the user. Reason: ' . $cancellation_reason,
+                            'warning',
+                            'booking-management.php',
+                            true
+                        );
+                    }
+                }
                 set_flash('info', 'Booking cancelled successfully.');
                 header('Location: dashboard.php');
                 exit;
@@ -355,7 +393,7 @@ $active = 'dashboard';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LaBS PPMKCP Dashboard</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.css') ?: time()); ?>">
 </head>
 <body data-login-url="index.php">
     <div class="app">
@@ -509,7 +547,6 @@ $active = 'dashboard';
                     <div class="content-header">
                         <div>
                             <h1>My Booking</h1>
-                            <p>Manage and track your lab bookings.</p>
                         </div>
                         <div class="breadcrumb">Home / My Booking</div>
                     </div>
@@ -662,6 +699,6 @@ $active = 'dashboard';
             });
         })();
     </script>
-    <script src="assets/app.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
 </body>
 </html>

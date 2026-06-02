@@ -313,22 +313,31 @@
         var month = availability.month;
         var year = availability.year;
         var bookedByDate = availability.bookedByDate || {};
+        var bookedDetailsByDate = availability.bookedDetailsByDate || {};
         var timeSlots = availability.timeSlots || [];
+        var bookingMode = availability.bookingMode === 'group' ? 'group' : 'slot';
         var maintenanceStatus = availability.maintenanceStatus || 'available';
         var maintenanceStartDate = availability.maintenanceStartDate || null;
         var maintenanceEndDate = availability.maintenanceEndDate || null;
         var maintenanceLabel = availability.maintenanceLabel || 'Maintenance schedule not set.';
+        var labName = availability.labName || 'this lab';
+        var labId = Number(availability.labId || 0);
 
         var calendarGrid = document.getElementById('calendar-grid');
         var calendarTitle = document.getElementById('calendar-title');
         var slotGrid = document.getElementById('slot-grid');
         var slotTitle = document.getElementById('slot-title');
-        var bookedList = document.getElementById('booked-slots');
         var bookingDateInput = document.getElementById('booking-date');
         var bookingSlotsInput = document.getElementById('booking-slots') || document.getElementById('booking-slot');
         var bookingSubmit = document.getElementById('booking-submit');
         var bookingHint = document.getElementById('booking-hint');
         var selectedDisplay = document.getElementById('selected-display');
+        var bookedSlotsModal = document.getElementById('booked-slots-modal');
+        var bookedSlotsModalTitle = document.getElementById('booked-slots-modal-title');
+        var bookedSlotsModalSubtitle = document.getElementById('booked-slots-modal-subtitle');
+        var bookedSlotsModalList = document.getElementById('booked-slots-modal-list');
+        var bookedSlotsModalClose = document.getElementById('booked-slots-modal-close');
+        var bookedSlotsModalBookNow = document.getElementById('booked-slots-modal-book-now');
 
         if (!calendarGrid || !slotGrid || !bookingDateInput || !bookingSlotsInput || !bookingSubmit) {
             return;
@@ -387,6 +396,12 @@
                     selectedDisplay.textContent = 'Selected: ' + selectedSlots.join(', ');
                 }
             }
+            if (bookingMode === 'group') {
+                bookingSubmit.textContent = bookingDateInput.value ? 'Continue Group Booking' : 'Select Reference Date';
+                bookingSlotsInput.value = bookingSlotsInput.id === 'booking-slots' ? '[]' : '';
+                bookingSubmit.disabled = !bookingDateInput.value;
+                return;
+            }
             bookingSubmit.textContent = selectedSlots.length === 0
                 ? 'Make Reservation'
                 : 'Make Reservation (' + selectedSlots.length + ' slot' + (selectedSlots.length !== 1 ? 's' : '') + ')';
@@ -409,11 +424,125 @@
             return true;
         }
 
+        function closeBookedSlotsModal() {
+            if (!bookedSlotsModal) {
+                return;
+            }
+            bookedSlotsModal.classList.remove('active');
+            bookedSlotsModal.setAttribute('aria-hidden', 'true');
+        }
+
+        function slotBounds(slot) {
+            var match = String(slot || '').match(/^(\d{2}:\d{2})-(\d{2}:\d{2})$/);
+            if (!match) {
+                return null;
+            }
+            return {
+                start: match[1],
+                end: match[2]
+            };
+        }
+
+        function groupBookedSlotDetails(bookedSlotDetails) {
+            var groups = [];
+            bookedSlotDetails.forEach(function (item) {
+                var label = item && item.label ? item.label : 'Booked';
+                var bookingType = item && item.booking_type === 'lecture' ? 'lecture' : 'lab';
+                var bookingMode = item && item.booking_mode === 'group' ? 'group' : 'slot';
+                var groupKeySource = item && item.group_booking_key ? String(item.group_booking_key) : '';
+                var identity = bookingMode === 'group'
+                    ? ['group', groupKeySource || label, bookingType].join('|')
+                    : ['slot', label, bookingType, String(item && item.reservation_id ? item.reservation_id : item && item.booking_id ? item.booking_id : item && item.time_slot ? item.time_slot : '')].join('|');
+                var bounds = slotBounds(item && item.time_slot ? item.time_slot : '');
+                var previous = groups.length ? groups[groups.length - 1] : null;
+
+                if (
+                    previous
+                    && previous.identity === identity
+                    && previous.lastEnd
+                    && bounds
+                    && previous.lastEnd === bounds.start
+                ) {
+                    previous.time_slot = previous.startTime + '-' + bounds.end;
+                    previous.lastEnd = bounds.end;
+                    previous.items.push(item);
+                    previous.can_edit_group = previous.can_edit_group || !!(item && item.can_edit_group);
+                    if (!previous.reservation_id && item && item.reservation_id) {
+                        previous.reservation_id = item.reservation_id;
+                    }
+                    return;
+                }
+
+                groups.push({
+                    identity: identity,
+                    label: label,
+                    booking_type: bookingType,
+                    booking_mode: bookingMode,
+                    reservation_id: item && item.reservation_id ? item.reservation_id : 0,
+                    can_edit_group: !!(item && item.can_edit_group),
+                    time_slot: item && item.time_slot ? item.time_slot : 'Booked',
+                    startTime: bounds ? bounds.start : null,
+                    lastEnd: bounds ? bounds.end : null,
+                    items: [item]
+                });
+            });
+            return groups;
+        }
+
+        function openBookedSlotsModal(dateKey, bookedSlotDetails, canBookNow) {
+            if (!bookedSlotsModal || !bookedSlotsModalList || !bookedSlotDetails.length) {
+                return;
+            }
+            var allowBooking = canBookNow !== false;
+            var groupedSlotDetails = groupBookedSlotDetails(bookedSlotDetails);
+            if (bookedSlotsModalTitle) {
+                bookedSlotsModalTitle.textContent = bookedSlotDetails.length + ' slot' + (bookedSlotDetails.length === 1 ? '' : 's') + ' booked for ' + labName;
+            }
+            if (bookedSlotsModalSubtitle) {
+                bookedSlotsModalSubtitle.textContent = 'Booking details on ' + dateKey;
+            }
+            if (bookedSlotsModalBookNow) {
+                bookedSlotsModalBookNow.disabled = !allowBooking;
+                bookedSlotsModalBookNow.textContent = allowBooking ? 'Book Now' : 'View Only';
+            }
+            bookedSlotsModalList.innerHTML = groupedSlotDetails.map(function (item) {
+                var label = item && item.label ? item.label : 'Booked';
+                var bookingType = item && item.booking_type === 'lecture' ? 'lecture' : 'lab';
+                var bookingTypeLabel = bookingType === 'lecture' ? 'Lecture' : 'Lab';
+                var editButton = '';
+                if (item && item.can_edit_group && Number(item.reservation_id || 0) > 0 && labId > 0) {
+                    var editUrl = 'reservation-form.php?lab_id=' + encodeURIComponent(String(labId)) +
+                        '&booking_mode=group&edit_group_reservation_id=' + encodeURIComponent(String(item.reservation_id));
+                    editButton = '<div class="booked-slot-modal-actions"><button class="btn ghost small booked-slot-edit-button" type="button" data-edit-url="' + escapeHtml(editUrl) + '">Edit Group Booking</button></div>';
+                }
+                return [
+                    '<div class="booked-slot-modal-item booking-type-' + bookingType + '">',
+                    '<div class="booked-slot-modal-time">' + escapeHtml(item.time_slot) + '</div>',
+                    '<div class="booked-slot-modal-content-block">',
+                    '<div class="booked-slot-modal-top">',
+                    '<span class="booked-slot-type-badge type-' + bookingType + '">' + bookingTypeLabel + '</span>',
+                    '</div>',
+                    '<div class="booked-slot-modal-booking">' + escapeHtml(label) + '</div>',
+                    editButton,
+                    '</div>',
+                    '</div>'
+                ].join('');
+            }).join('');
+            bookedSlotsModal.classList.add('active');
+            bookedSlotsModal.setAttribute('aria-hidden', 'false');
+        }
+
         function renderSlots(dateKey, isRestricted, isMaintenance) {
             var bookedSlots = bookedByDate[dateKey] || [];
+            var bookedSlotDetails = bookedDetailsByDate[dateKey] || [];
             slotGrid.innerHTML = '';
             selectedSlots = [];
             updateSelectedDisplay();
+
+            if (bookingMode === 'group') {
+                slotGrid.innerHTML = '<div class="empty-state">Group booking uses weekly session setup in the next form. Select a reference date, then continue.</div>';
+                return;
+            }
             
             timeSlots.forEach(function (slot) {
                 var isBooked = bookedSlots.indexOf(slot) !== -1;
@@ -445,18 +574,6 @@
                 });
                 slotGrid.appendChild(button);
             });
-
-            if (bookedList) {
-                if (isMaintenance) {
-                    bookedList.textContent = 'Lab is under maintenance on this date.';
-                } else if (bookedSlots.length === 0) {
-                    bookedList.textContent = 'No bookings for this date.';
-                } else {
-                    bookedList.innerHTML = bookedSlots.map(function (slot) {
-                        return '<span class="badge">' + slot + '</span>';
-                    }).join(' ');
-                }
-            }
         }
 
         function selectDate(dateKey) {
@@ -465,22 +582,36 @@
             selectedSlots = [];
             updateSelectedDisplay();
             if (slotTitle) {
-                slotTitle.textContent = 'Slots on ' + formatDate(new Date(dateKey + 'T00:00:00'));
+                slotTitle.textContent = bookingMode === 'group'
+                    ? 'Reference date: ' + formatDate(new Date(dateKey + 'T00:00:00'))
+                    : 'Slots on ' + formatDate(new Date(dateKey + 'T00:00:00'));
             }
             var minDateKey = formatKey(minDate);
             var isRestricted = dateKey < minDateKey;
             var isMaintenance = isMaintenanceDate(dateKey);
             renderSlots(dateKey, isRestricted, isMaintenance);
-            bookingSubmit.disabled = true;
+            if (bookingMode !== 'group') {
+                bookingSubmit.disabled = true;
+            }
+            closeBookedSlotsModal();
+            if (!isMaintenance && bookedSlotDetailsByDateHasItems(dateKey)) {
+                openBookedSlotsModal(dateKey, bookedDetailsByDate[dateKey] || [], true);
+            }
             if (bookingHint) {
                 if (isRestricted) {
                     bookingHint.textContent = 'Bookings must be made at least 3 days in advance.';
                 } else if (isMaintenance) {
                     bookingHint.textContent = 'This lab is under maintenance on ' + dateKey + ' (' + maintenanceLabel + ').';
+                } else if (bookingMode === 'group') {
+                    bookingHint.textContent = 'Reference date selected. Continue to set number of weeks, days, and times for lecture or lab sessions.';
                 } else {
                     bookingHint.textContent = 'Please pick one or more time slots to continue.';
                 }
             }
+        }
+
+        function bookedSlotDetailsByDateHasItems(dateKey) {
+            return Array.isArray(bookedDetailsByDate[dateKey]) && bookedDetailsByDate[dateKey].length > 0;
         }
 
         for (var day = 1; day <= totalDays; day++) {
@@ -491,19 +622,53 @@
             var bookingCount = (bookedByDate[dateKey] || []).length;
             var cellIsMaintenance = isMaintenanceDate(dateKey);
 
+            if (!cellIsMaintenance) {
+                cell.classList.add(bookingCount > 0 ? 'has-booking' : 'is-available');
+            }
+
             cell.innerHTML = [
                 '<div class="calendar-day">' + day + '</div>',
                 '<div class="calendar-meta">' + (cellIsMaintenance ? 'Maintenance' : (bookingCount + ' bookings')) + '</div>'
             ].join('');
 
-            if (cellDate < minDate || cellIsMaintenance) {
+            var cellIsPast = cellDate < today;
+            var cellIsLeadRestricted = cellDate >= today && cellDate < minDate;
+
+            if (cellIsPast) {
+                cell.classList.add('past-viewable');
+            }
+            if (cellIsLeadRestricted || cellIsMaintenance) {
                 cell.classList.add('disabled');
             }
             cell.addEventListener('click', function () {
-                if (this.classList.contains('disabled')) {
+                if (cellIsMaintenance || cellIsLeadRestricted) {
                     return;
                 }
                 var selectedKey = this.getAttribute('data-date');
+                if (cellIsPast) {
+                    closeBookedSlotsModal();
+                    renderSlots(selectedKey, true, false);
+                    bookingDateInput.value = '';
+                    bookingSlotsInput.value = bookingSlotsInput.id === 'booking-slots' ? '[]' : '';
+                    selectedSlots = [];
+                    syncSelectedDisplay();
+                    syncBookingButton();
+                    if (slotTitle) {
+                        slotTitle.textContent = 'Booked slots on ' + new Date(selectedKey).toLocaleDateString('en-GB', {
+                            weekday: 'long',
+                            day: 'numeric',
+                            month: 'long',
+                            year: 'numeric'
+                        });
+                    }
+                    if (bookingHint) {
+                        bookingHint.textContent = 'Past dates are view-only. You can review booked slots but cannot make a reservation.';
+                    }
+                    if (bookedSlotDetailsByDateHasItems(selectedKey)) {
+                        openBookedSlotsModal(selectedKey, bookedDetailsByDate[selectedKey] || [], false);
+                    }
+                    return;
+                }
                 var cells = calendarGrid.querySelectorAll('.calendar-cell');
                 cells.forEach(function (item) { item.classList.remove('selected'); });
                 this.classList.add('selected');
@@ -531,6 +696,38 @@
                 defaultCell.classList.add('selected');
                 selectDate(selectedDate);
             }
+        }
+
+        if (bookedSlotsModalClose) {
+            bookedSlotsModalClose.addEventListener('click', closeBookedSlotsModal);
+        }
+        if (bookedSlotsModal) {
+            bookedSlotsModal.addEventListener('click', function (event) {
+                if (event.target === bookedSlotsModal) {
+                    closeBookedSlotsModal();
+                }
+            });
+        }
+        if (bookedSlotsModalBookNow) {
+            bookedSlotsModalBookNow.addEventListener('click', function () {
+                closeBookedSlotsModal();
+                if (slotGrid) {
+                    slotGrid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        }
+        if (bookedSlotsModalList) {
+            bookedSlotsModalList.addEventListener('click', function (event) {
+                var editButton = event.target.closest('.booked-slot-edit-button');
+                if (!editButton) {
+                    return;
+                }
+                var editUrl = editButton.getAttribute('data-edit-url');
+                if (!editUrl) {
+                    return;
+                }
+                window.location.href = editUrl;
+            });
         }
     }
 

@@ -29,7 +29,7 @@ $active = 'profile';
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>User Profile</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.css') ?: time()); ?>">
 </head>
 <body data-login-url="index.php">
     <div class="app">
@@ -171,7 +171,18 @@ $active = 'profile';
                     <label for="form-ptj">Pusat Tanggung Jawab</label>
                     <select name="organization" id="form-ptj"></select>
                 </div>
+                <div class="inline-card">
+                    <div class="inline-card-body">
+                        <h3 class="section-mini-title">Notification Channels</h3>
+                        <label class="checkbox">
+                            <input type="checkbox" name="notify_email" id="form-notify-email">
+                            <span>Enable email notifications</span>
+                        </label>
+                        <p class="muted-text">In-system notifications remain active automatically.</p>
+                    </div>
+                </div>
                 <div id="profile-error" class="alert alert-error" hidden></div>
+                <div id="profile-success" class="alert alert-success" hidden></div>
                 <div class="modal-footer">
                     <button type="button" class="btn ghost" data-close="profile-modal">Cancel</button>
                     <button type="submit" class="btn primary">Save Changes</button>
@@ -184,8 +195,7 @@ $active = 'profile';
         window.LABS_USER = <?php echo json_encode($user_payload); ?>;
         window.LABS_LOGIN_URL = 'index.php';
     </script>
-    <script src="assets/app.js"></script>
-    <script src="assets/profile.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
+    <script src="assets/profile.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/profile.js') ?: time()); ?>"></script>
 </body>
 </html>
-

@@ -2,4 +2,14 @@ ALTER TABLE lab_reservations
     ADD COLUMN booking_purpose ENUM('lab','class') NOT NULL DEFAULT 'lab' AFTER phone,
     ADD COLUMN class_course_code VARCHAR(8) DEFAULT NULL AFTER booking_purpose,
     ADD COLUMN class_subject_name VARCHAR(255) DEFAULT NULL AFTER class_course_code,
-    ADD COLUMN class_section VARCHAR(50) DEFAULT NULL AFTER class_subject_name;
+    ADD COLUMN class_section VARCHAR(50) DEFAULT NULL AFTER class_subject_name,
+    ADD COLUMN booking_mode ENUM('slot','group') NOT NULL DEFAULT 'slot' AFTER booking_purpose,
+    ADD COLUMN group_booking_type ENUM('lecture','lab') DEFAULT NULL AFTER booking_mode,
+    ADD COLUMN group_weeks_count INT UNSIGNED DEFAULT NULL AFTER group_booking_type,
+    ADD COLUMN group_reference_date DATE DEFAULT NULL AFTER group_weeks_count,
+    ADD COLUMN group_start_date DATE DEFAULT NULL AFTER group_reference_date,
+    ADD COLUMN group_end_date DATE DEFAULT NULL AFTER group_start_date,
+    ADD COLUMN group_midsem_start_date DATE DEFAULT NULL AFTER group_end_date,
+    ADD COLUMN group_midsem_end_date DATE DEFAULT NULL AFTER group_midsem_start_date,
+    ADD COLUMN group_sessions_json LONGTEXT DEFAULT NULL AFTER group_midsem_end_date,
+    ADD COLUMN group_booking_key VARCHAR(64) DEFAULT NULL AFTER group_sessions_json;

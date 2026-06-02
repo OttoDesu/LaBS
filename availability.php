@@ -2,9 +2,14 @@
 require_once __DIR__ . '/init.php';
 require_login();
 
+$user_id = (int) ($_SESSION['user_id'] ?? 0);
 $lab_id = isset($_GET['lab_id']) ? (int) $_GET['lab_id'] : 0;
 $month = isset($_GET['month']) ? (int) $_GET['month'] : (int) date('n');
 $year = isset($_GET['year']) ? (int) $_GET['year'] : (int) date('Y');
+$user_type = $_SESSION['user_type'] ?? 'public';
+$is_lab_supervisor = is_lab_supervisor($user_type);
+$booking_mode = $_GET['booking_mode'] ?? $_POST['booking_mode'] ?? 'slot';
+$booking_mode = $is_lab_supervisor && $booking_mode === 'group' ? 'group' : 'slot';
 
 if ($month < 1 || $month > 12) {
     $month = (int) date('n');
@@ -57,7 +62,32 @@ if (!$lab) {
     exit;
 }
 
+$default_group_reference = new DateTime('today');
+$default_group_reference->modify('+3 days');
+$guard = 0;
+while (
+    (($lab['maintenance_status'] ?? 'available') === 'maintenance')
+    && is_lab_under_maintenance($lab, $default_group_reference->format('Y-m-d'))
+    && $guard < 366
+) {
+    $default_group_reference->modify('+1 day');
+    $guard++;
+}
+$default_group_reference_date = $default_group_reference->format('Y-m-d');
+
+if ($is_lab_supervisor && $booking_mode === 'group' && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+
+    $query = http_build_query([
+        'lab_id' => $lab_id,
+        'booking_date' => $default_group_reference_date,
+        'booking_mode' => 'group'
+    ]);
+    header('Location: reservation-form.php?' . $query);
+    exit;
+}
+
 $time_slots = [
+    '08:00-09:00',
     '09:00-10:00',
     '10:00-11:00',
     '11:00-12:00',
@@ -65,7 +95,13 @@ $time_slots = [
     '13:00-14:00',
     '14:00-15:00',
     '15:00-16:00',
-    '16:00-17:00'
+    '16:00-17:00',
+    '17:00-18:00',
+    '18:00-19:00',
+    '19:00-20:00',
+    '20:00-21:00',
+    '21:00-22:00',
+    '22:00-23:00'
 ];
 
 $maintenance_label = get_lab_maintenance_period_label($lab['maintenance_start_date'] ?? null, $lab['maintenance_end_date'] ?? null);
@@ -73,9 +109,12 @@ $maintenance_days = get_lab_maintenance_day_count($lab['maintenance_start_date']
 $lab_has_maintenance_window = (($lab['maintenance_status'] ?? 'available') === 'maintenance');
 
 $errors = [];
+$booking_pk = get_booking_pk_column($mysqli);
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $booking_date = $_POST['booking_date'] ?? '';
     $time_slot = $_POST['time_slot'] ?? '';
+    $booking_mode = $_POST['booking_mode'] ?? $booking_mode;
+    $booking_mode = $is_lab_supervisor && $booking_mode === 'group' ? 'group' : 'slot';
     if (is_lab_under_maintenance($lab, $booking_date)) {
         $errors[] = 'This lab is under maintenance on the selected date.';
     }
@@ -83,7 +122,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $query = http_build_query([
             'lab_id' => $lab_id,
             'booking_date' => $booking_date,
-            'time_slot' => $time_slot
+            'time_slot' => $time_slot,
+            'booking_mode' => $booking_mode
         ]);
         header('Location: reservation-form.php?' . $query);
         exit;
@@ -93,8 +133,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $start_date = sprintf('%04d-%02d-01', $year, $month);
 $end_date = date('Y-m-t', strtotime($start_date));
 $booked_by_date = [];
+$booked_details_by_date = [];
 
-$stmt = $mysqli->prepare("SELECT booking_date, time_slot FROM lab_bookings WHERE lab_id = ? AND booking_date BETWEEN ? AND ? AND status = 'Approved'");
+$stmt = $mysqli->prepare("
+    SELECT
+        b.{$booking_pk} AS booking_id,
+        b.user_id,
+        b.booking_date,
+        b.time_slot,
+        r.reservation_id,
+        COALESCE(NULLIF(r.title, ''), NULLIF(r.class_course_code, ''), NULLIF(r.class_subject_name, ''), 'Booked')
+            AS booking_label,
+        CASE
+            WHEN r.group_booking_type IN ('lecture', 'lab') THEN r.group_booking_type
+            WHEN r.booking_purpose = 'class' THEN 'lecture'
+            ELSE 'lab'
+        END AS booking_type,
+        r.booking_mode,
+        r.group_booking_key
+    FROM lab_bookings b
+    LEFT JOIN lab_reservations r ON r.booking_id = b.{$booking_pk}
+    WHERE b.lab_id = ?
+      AND b.booking_date BETWEEN ? AND ?
+      AND b.status = 'Approved'
+    ORDER BY b.booking_date ASC, b.time_slot ASC
+");
 $stmt->bind_param('iss', $lab_id, $start_date, $end_date);
 $stmt->execute();
 $result = $stmt->get_result();
@@ -104,6 +167,21 @@ while ($row = $result->fetch_assoc()) {
         $booked_by_date[$date_key] = [];
     }
     $booked_by_date[$date_key][] = $row['time_slot'];
+    if (!isset($booked_details_by_date[$date_key])) {
+        $booked_details_by_date[$date_key] = [];
+    }
+    $booked_details_by_date[$date_key][] = [
+        'booking_id' => (int) ($row['booking_id'] ?? 0),
+        'reservation_id' => (int) ($row['reservation_id'] ?? 0),
+        'time_slot' => $row['time_slot'],
+        'label' => $row['booking_label'],
+        'booking_type' => $row['booking_type'],
+        'booking_mode' => $row['booking_mode'] ?? 'slot',
+        'group_booking_key' => $row['group_booking_key'] ?? null,
+        'can_edit_group' => $is_lab_supervisor
+            && (($row['booking_mode'] ?? 'slot') === 'group')
+            && ((int) ($row['user_id'] ?? 0) === $user_id)
+    ];
 }
 $stmt->close();
 
@@ -128,6 +206,9 @@ if ($is_lab_supervisor) {
 }
 $layout = require $layout_path;
 $active = 'booking';
+$app_css_version = @filemtime(__DIR__ . '/assets/app.css') ?: time();
+$app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
+$booking_js_version = @filemtime(__DIR__ . '/assets/booking.js') ?: time();
 
 $prev_month = $month - 1;
 $prev_year = $year;
@@ -148,7 +229,7 @@ if ($next_month > 12) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Availability Calendar</title>
-    <link rel="stylesheet" href="assets/app.css">
+    <link rel="stylesheet" href="assets/app.css?v=<?php echo (int) $app_css_version; ?>">
 </head>
 <body data-login-url="index.php">
     <div class="app">
@@ -217,7 +298,7 @@ if ($next_month > 12) {
                 <div class="content-header">
                     <div>
                         <h1><?php echo htmlspecialchars($lab['lab_name']); ?></h1>
-                        <p>Pick a date and time slot to reserve this lab.</p>
+                        <p><?php echo $booking_mode === 'group' ? 'Pick a reference date to continue with recurring class booking.' : 'Pick a date and time slot to reserve this lab.'; ?></p>
                     </div>
                     <div class="breadcrumb">Home / <?php echo htmlspecialchars($lab['lab_name']); ?></div>
                 </div>
@@ -306,11 +387,6 @@ if ($next_month > 12) {
                             </div>
                         </div>
 
-                        <div class="card">
-                            <h3>Booked Slots</h3>
-                            <p class="muted-text">Select a date on the calendar to see booked slots.</p>
-                            <div id="booked-slots" class="booked-list">No date selected.</div>
-                        </div>
                     </div>
 
                     <div class="card availability-card">
@@ -318,7 +394,6 @@ if ($next_month > 12) {
                             <div>
                                 <p class="badge">Availability Calendar</p>
                                 <h3>Pick a date to view slots</h3>
-                                <p class="muted-text">Past dates are locked; bookings must be made at least 3 days in advance.</p>
                                 <?php if ($lab_has_maintenance_window): ?>
                                     <p class="muted-text">Maintenance period: <?php echo htmlspecialchars($maintenance_label); ?><?php if ($maintenance_days !== null): ?> (<?php echo (int) $maintenance_days; ?> day<?php echo $maintenance_days === 1 ? '' : 's'; ?>)<?php endif; ?></p>
                                 <?php endif; ?>
@@ -329,11 +404,29 @@ if ($next_month > 12) {
                                 <a class="icon-button" href="availability.php?lab_id=<?php echo (int) $lab_id; ?>&month=<?php echo $next_month; ?>&year=<?php echo $next_year; ?>">›</a>
                             </div>
                         </div>
+                        <?php if ($is_lab_supervisor): ?>
+                            <div class="card booking-mode-card">
+                                <div class="section-header">
+                                    <div>
+                                        <h3>Booking Mode</h3>
+                                    </div>
+                                </div>
+                                <div class="toggle-group purpose-toggle-group" id="booking-mode-switch">
+                                    <button class="toggle-option <?php echo $booking_mode !== 'group' ? 'active' : ''; ?>" type="button" data-mode="slot">
+                                        <span>Book Slot Lab</span>
+                                    </button>
+                                    <button class="toggle-option <?php echo $booking_mode === 'group' ? 'active' : ''; ?>" type="button" data-mode="group">
+                                        <span>Group Booking</span>
+                                    </button>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
                         <div class="calendar-grid" id="calendar-grid"></div>
 
                         <div class="slot-section">
                             <div class="slot-header">
-                                <h4 id="slot-title">Select a date to view slots</h4>
+                                <h4 id="slot-title"><?php echo $booking_mode === 'group' ? 'Select a reference date to continue' : 'Select a date to view slots'; ?></h4>
                                 <div class="slot-legend">
                                     <span class="dot available"></span> Available
                                     <span class="dot booked"></span> Booked
@@ -344,13 +437,18 @@ if ($next_month > 12) {
                                 <input type="hidden" name="lab_id" value="<?php echo (int) $lab_id; ?>">
                                 <input type="hidden" name="booking_date" id="booking-date">
                                 <input type="hidden" name="time_slots" id="booking-slots">
+                                <input type="hidden" name="booking_mode" value="<?php echo htmlspecialchars($booking_mode); ?>">
                                 <div id="slot-grid"></div>
-                                <button class="btn primary" id="booking-submit" type="submit" disabled>Make Reservation</button>
+                                <button class="btn primary" id="booking-submit" type="submit" disabled><?php echo $booking_mode === 'group' ? 'Continue Group Booking' : 'Make Reservation'; ?></button>
                                 <p class="muted-text" id="booking-hint">
                                     <?php if ($lab_has_maintenance_window): ?>
                                         Dates inside the maintenance period are locked automatically. Maintenance period: <?php echo htmlspecialchars($maintenance_label); ?><?php if ($maintenance_days !== null): ?> (<?php echo (int) $maintenance_days; ?> day<?php echo $maintenance_days === 1 ? '' : 's'; ?>)<?php endif; ?>.
                                     <?php else: ?>
-                                        Please pick a date on or after <?php echo htmlspecialchars((new DateTime('today'))->modify('+3 days')->format('Y-m-d')); ?>.
+                                        <?php if ($booking_mode === 'group'): ?>
+                                            Group booking selected. Pick a reference date first. Number of weeks, days, labs, and times are set in the next form.
+                                        <?php else: ?>
+                                            Please pick a date on or after <?php echo htmlspecialchars((new DateTime('today'))->modify('+3 days')->format('Y-m-d')); ?>.
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </p>
                             </form>
@@ -363,6 +461,29 @@ if ($next_month > 12) {
         </div>
     </div>
 
+    <div class="modal" id="booked-slots-modal" aria-hidden="true">
+        <div class="modal-content modal-content-wide booked-slots-modal-content">
+            <div class="modal-header">
+                <div>
+                    <h3 id="booked-slots-modal-title">Booked Slots</h3>
+                    <p class="muted-text" id="booked-slots-modal-subtitle">Booking details for the selected date.</p>
+                </div>
+                <button class="icon-button" type="button" id="booked-slots-modal-close" aria-label="Close">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M5 5L15 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        <path d="M15 5L5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="booked-slots-modal-list" class="booked-slot-modal-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn primary" type="button" id="booked-slots-modal-book-now">Book Now</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         window.LABS_USER = <?php echo json_encode($user_payload); ?>;
         window.LABS_LOGIN_URL = 'index.php';
@@ -370,14 +491,55 @@ if ($next_month > 12) {
             'month' => $month,
             'year' => $year,
             'bookedByDate' => $booked_by_date,
+            'bookedDetailsByDate' => $booked_details_by_date,
             'timeSlots' => $time_slots,
             'maintenanceStatus' => $lab['maintenance_status'] ?? 'available',
             'maintenanceStartDate' => $lab['maintenance_start_date'] ?? null,
             'maintenanceEndDate' => $lab['maintenance_end_date'] ?? null,
-            'maintenanceLabel' => $maintenance_label
+            'maintenanceLabel' => $maintenance_label,
+            'bookingMode' => $booking_mode,
+            'labName' => $lab['lab_name'],
+            'labId' => (int) $lab_id
         ]); ?>;
     </script>
-    <script src="assets/app.js"></script>
-    <script src="assets/booking.js"></script>
+    <script src="assets/app.js?v=<?php echo (int) $app_js_version; ?>"></script>
+    <script src="assets/booking.js?v=<?php echo (int) $booking_js_version; ?>"></script>
+    <script>
+        (function () {
+            var switcher = document.getElementById('booking-mode-switch');
+            if (!switcher) {
+                return;
+            }
+            var links = document.querySelectorAll('a[href*="availability.php"]');
+            var buttons = switcher.querySelectorAll('[data-mode]');
+            function buildGroupBookingUrl() {
+                var url = new URL('reservation-form.php', window.location.href);
+                url.searchParams.set('lab_id', <?php echo (int) $lab_id; ?>);
+                url.searchParams.set('booking_date', <?php echo json_encode($default_group_reference_date); ?>);
+                url.searchParams.set('booking_mode', 'group');
+                return url.toString();
+            }
+            function currentUrlWithMode(mode) {
+                var url = new URL(window.location.href);
+                url.searchParams.set('booking_mode', mode);
+                return url.toString();
+            }
+            buttons.forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var mode = button.getAttribute('data-mode') || 'slot';
+                    window.location.href = mode === 'group' ? buildGroupBookingUrl() : currentUrlWithMode(mode);
+                });
+            });
+            links.forEach(function (link) {
+                try {
+                    var url = new URL(link.href, window.location.origin);
+                    url.searchParams.set('booking_mode', <?php echo json_encode($booking_mode); ?>);
+                    link.href = url.toString();
+                } catch (error) {
+                    // ignore malformed links
+                }
+            });
+        })();
+    </script>
 </body>
 </html>

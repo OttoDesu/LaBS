@@ -40,12 +40,46 @@ if ($user_id <= 0) {
     ], 401);
 }
 
-if (!is_super_admin($user_type)) {
+if (!is_management_user($user_type) && !is_super_admin($user_type)) {
     report_json_response([
         'success' => false,
-        'message' => 'Super admin access required.'
+        'message' => 'Report access denied.'
     ], 403);
 }
+
+function get_report_scope(mysqli $mysqli, int $user_id, string $user_type): array {
+    if (is_super_admin($user_type)) {
+        return [
+            'role' => 'super_admin',
+            'cluster_id' => null,
+            'lab_ids' => []
+        ];
+    }
+
+    if (is_cluster_admin($user_type)) {
+        return [
+            'role' => 'cluster_admin',
+            'cluster_id' => get_admin_cluster_id(),
+            'lab_ids' => []
+        ];
+    }
+
+    if (is_lab_supervisor($user_type)) {
+        return [
+            'role' => 'lab_supervisor',
+            'cluster_id' => null,
+            'lab_ids' => get_lab_supervisor_lab_ids($mysqli, $user_id)
+        ];
+    }
+
+    return [
+        'role' => 'unknown',
+        'cluster_id' => null,
+        'lab_ids' => []
+    ];
+}
+
+$report_scope = get_report_scope($mysqli, $user_id, $user_type);
 
 function get_month_name(int $month): string {
     $months = [
@@ -92,10 +126,53 @@ function get_date_range_days(string $start_date, string $end_date): int {
     return (int) $start->diff($end)->days + 1;
 }
 
-function build_report_conditions(array $filters, string &$types, array &$params): string {
+function build_report_hours_sql(string $time_slot_column = 'lb.time_slot'): string {
+    return "
+        CASE
+            WHEN lr.start_time IS NOT NULL
+             AND lr.end_time IS NOT NULL
+             AND TIME_TO_SEC(lr.end_time) > TIME_TO_SEC(lr.start_time)
+                THEN ROUND(TIMESTAMPDIFF(MINUTE, lr.start_time, lr.end_time) / 60, 2)
+            WHEN {$time_slot_column} REGEXP '^[0-9]{2}:[0-9]{2}-[0-9]{2}:[0-9]{2}$'
+                THEN GREATEST(
+                    TIMESTAMPDIFF(
+                        MINUTE,
+                        STR_TO_DATE(SUBSTRING_INDEX({$time_slot_column}, '-', 1), '%H:%i'),
+                        STR_TO_DATE(SUBSTRING_INDEX({$time_slot_column}, '-', -1), '%H:%i')
+                    ) / 60,
+                    0
+                )
+            ELSE 0
+        END
+    ";
+}
+
+function build_report_conditions(array $filters, array $scope, string &$types, array &$params): string {
     $conditions = [
         'lb.booking_date IS NOT NULL'
     ];
+
+    if (($scope['role'] ?? '') === 'cluster_admin') {
+        $scope_cluster_id = (int) ($scope['cluster_id'] ?? 0);
+        if ($scope_cluster_id <= 0) {
+            $conditions[] = '1 = 0';
+        } else {
+            $conditions[] = 'l.cluster_id = ?';
+            $types .= 'i';
+            $params[] = $scope_cluster_id;
+        }
+    } elseif (($scope['role'] ?? '') === 'lab_supervisor') {
+        $scope_lab_ids = array_values(array_filter(array_map('intval', $scope['lab_ids'] ?? [])));
+        if (!$scope_lab_ids) {
+            $conditions[] = '1 = 0';
+        } else {
+            $conditions[] = 'l.lab_id IN (' . implode(',', array_fill(0, count($scope_lab_ids), '?')) . ')';
+            $types .= str_repeat('i', count($scope_lab_ids));
+            foreach ($scope_lab_ids as $scope_lab_id) {
+                $params[] = $scope_lab_id;
+            }
+        }
+    }
 
     $filter_type = $filters['filter_type'];
     $year = (int) ($filters['year'] ?? 0);
@@ -207,19 +284,42 @@ $action = $_GET['action'] ?? 'report';
 
 if ($action === 'labs') {
     $cluster_id = (int) ($_GET['cluster_id'] ?? 0);
-    if ($cluster_id <= 0) {
-        report_json_response([
-            'success' => true,
-            'labs' => []
-        ]);
-    }
+    $labs = [];
 
-    $labs = execute_prepared_query(
-        $mysqli,
-        'SELECT lab_id, lab_name FROM labs WHERE cluster_id = ? ORDER BY lab_name ASC',
-        'i',
-        [$cluster_id]
-    );
+    if (($report_scope['role'] ?? '') === 'cluster_admin') {
+        $cluster_id = (int) ($report_scope['cluster_id'] ?? 0);
+        if ($cluster_id > 0) {
+            $labs = execute_prepared_query(
+                $mysqli,
+                'SELECT lab_id, lab_name FROM labs WHERE cluster_id = ? ORDER BY lab_name ASC',
+                'i',
+                [$cluster_id]
+            );
+        }
+    } elseif (($report_scope['role'] ?? '') === 'lab_supervisor') {
+        $scope_lab_ids = array_values(array_filter(array_map('intval', $report_scope['lab_ids'] ?? [])));
+        if ($scope_lab_ids) {
+            $sql = 'SELECT lab_id, lab_name FROM labs WHERE lab_id IN (' . implode(',', array_fill(0, count($scope_lab_ids), '?')) . ')';
+            $types = str_repeat('i', count($scope_lab_ids));
+            $params = $scope_lab_ids;
+            if ($cluster_id > 0) {
+                $sql .= ' AND cluster_id = ?';
+                $types .= 'i';
+                $params[] = $cluster_id;
+            }
+            $sql .= ' ORDER BY lab_name ASC';
+            $labs = execute_prepared_query($mysqli, $sql, $types, $params);
+        }
+    } else {
+        if ($cluster_id > 0) {
+            $labs = execute_prepared_query(
+                $mysqli,
+                'SELECT lab_id, lab_name FROM labs WHERE cluster_id = ? ORDER BY lab_name ASC',
+                'i',
+                [$cluster_id]
+            );
+        }
+    }
 
     report_json_response([
         'success' => true,
@@ -291,6 +391,27 @@ if ($filter_type === 'date' && $start_date > $end_date) {
 $selected_days = $filter_type === 'date' ? get_date_range_days($start_date, $end_date) : 0;
 
 $cluster_name = '';
+if (($report_scope['role'] ?? '') === 'cluster_admin') {
+    $scope_cluster_id = (int) ($report_scope['cluster_id'] ?? 0);
+    if ($cluster_id > 0 && $cluster_id !== $scope_cluster_id) {
+        report_json_response([
+            'success' => false,
+            'message' => 'You can only view reports for your assigned cluster.'
+        ], 403);
+    }
+    $cluster_id = $scope_cluster_id;
+}
+
+if (($report_scope['role'] ?? '') === 'lab_supervisor' && $lab_id > 0) {
+    $scope_lab_ids = array_values(array_filter(array_map('intval', $report_scope['lab_ids'] ?? [])));
+    if (!in_array($lab_id, $scope_lab_ids, true)) {
+        report_json_response([
+            'success' => false,
+            'message' => 'You can only view reports for your assigned labs.'
+        ], 403);
+    }
+}
+
 if ($cluster_id > 0) {
     $cluster_rows = execute_prepared_query(
         $mysqli,
@@ -348,15 +469,16 @@ $filters = [
 
 $types = '';
 $params = [];
-$where_clause = build_report_conditions($filters, $types, $params);
+$where_clause = build_report_conditions($filters, $report_scope, $types, $params);
 $booking_pk = get_booking_pk_column($mysqli);
+$hours_sql = build_report_hours_sql('lb.time_slot');
 
 $summary_rows = execute_prepared_query(
     $mysqli,
     "
     SELECT COUNT(*) AS total_bookings,
            COUNT(DISTINCT lb.user_id) AS unique_users,
-           COALESCE(SUM(TIMESTAMPDIFF(MINUTE, lr.start_time, lr.end_time)), 0) / 60 AS total_hours
+           COALESCE(SUM({$hours_sql}), 0) AS total_hours
     FROM lab_bookings lb
     LEFT JOIN lab_reservations lr ON lr.booking_id = lb.{$booking_pk}
     JOIN labs l ON lb.lab_id = l.lab_id
@@ -549,7 +671,7 @@ $table_rows = execute_prepared_query(
            lr.end_time,
            lb.time_slot,
            lb.status,
-           ROUND(TIMESTAMPDIFF(MINUTE, lr.start_time, lr.end_time) / 60, 2) AS total_hours
+           {$hours_sql} AS total_hours
     FROM lab_bookings lb
     LEFT JOIN lab_reservations lr ON lr.booking_id = lb.{$booking_pk}
     JOIN labs l ON lb.lab_id = l.lab_id
