@@ -242,6 +242,9 @@
         });
 
         fetchNotifications(false);
+        window.setInterval(function () {
+            fetchNotifications(false);
+        }, 60000);
     }
 
     var globalSearch = document.getElementById('global-search');

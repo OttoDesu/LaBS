@@ -1571,7 +1571,7 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                         <?php endif; ?>
 
                         <?php if ($booking_mode === 'slot' && $booking_hold_expires_at_unix > 0): ?>
-                            <div class="alert alert-warning booking-hold-banner" data-hold-expires-at-unix="<?php echo (int) $booking_hold_expires_at_unix; ?>">
+                            <div class="alert alert-warning booking-hold-banner" data-hold-expires-at-unix="<?php echo (int) $booking_hold_expires_at_unix; ?>" data-hold-token="<?php echo htmlspecialchars($booking_hold_token); ?>">
                                 <div class="booking-hold-copy">
                                     <strong>Selected slots are locked for 15 minutes.</strong>
                                     <span class="booking-hold-note">If you leave without submitting, the selected date and time remain locked until the timer ends.</span>
@@ -2339,6 +2339,7 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
             if (bookingHoldBanner) {
                 var bookingHoldCountdown = bookingHoldBanner.querySelector('.booking-hold-countdown');
                 var holdExpiresAtUnix = Number(bookingHoldBanner.getAttribute('data-hold-expires-at-unix') || '0');
+                var holdReminderRequested = false;
 
                 function updateBookingHoldCountdown() {
                     if (!bookingHoldCountdown || !holdExpiresAtUnix) {
@@ -2357,10 +2358,77 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                     var minutes = Math.floor(totalSeconds / 60);
                     var seconds = totalSeconds % 60;
                     bookingHoldCountdown.textContent = 'Time remaining: ' + String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+                    if (!holdReminderRequested && remainingMs <= 300000) {
+                        holdReminderRequested = true;
+                        fetch('notifications-api.php?action=list', {
+                            credentials: 'same-origin'
+                        }).catch(function () {});
+                    }
                 }
 
                 updateBookingHoldCountdown();
                 window.setInterval(updateBookingHoldCountdown, 1000);
+            }
+
+            var reservationForm = document.querySelector('.reservation-form');
+            var holdTokenInput = reservationForm ? reservationForm.querySelector('input[name="booking_hold_token"]') : null;
+            var holdToken = holdTokenInput ? String(holdTokenInput.value || '') : '';
+            var draftKey = holdToken ? 'labs_booking_hold_draft_' + holdToken : '';
+
+            function getDraftControls() {
+                if (!reservationForm) {
+                    return [];
+                }
+                return Array.prototype.slice.call(reservationForm.querySelectorAll('input[name], textarea[name], select[name]')).filter(function (control) {
+                    return control.type !== 'hidden' && control.type !== 'file' && !control.disabled;
+                });
+            }
+
+            function saveHoldDraft() {
+                if (!draftKey) {
+                    return;
+                }
+                var draft = {};
+                getDraftControls().forEach(function (control) {
+                    if (control.type === 'checkbox' || control.type === 'radio') {
+                        draft[control.name] = control.checked ? '1' : '0';
+                    } else {
+                        draft[control.name] = control.value;
+                    }
+                });
+                try {
+                    localStorage.setItem(draftKey, JSON.stringify(draft));
+                } catch (error) {}
+            }
+
+            function restoreHoldDraft() {
+                if (!draftKey) {
+                    return;
+                }
+                var rawDraft = localStorage.getItem(draftKey);
+                if (!rawDraft) {
+                    return;
+                }
+                try {
+                    var draft = JSON.parse(rawDraft);
+                    getDraftControls().forEach(function (control) {
+                        if (!Object.prototype.hasOwnProperty.call(draft, control.name)) {
+                            return;
+                        }
+                        if (control.type === 'checkbox' || control.type === 'radio') {
+                            control.checked = draft[control.name] === '1';
+                        } else {
+                            control.value = draft[control.name];
+                        }
+                        control.dispatchEvent(new Event('change', { bubbles: true }));
+                    });
+                } catch (error) {}
+            }
+
+            if (reservationForm && draftKey) {
+                restoreHoldDraft();
+                reservationForm.addEventListener('input', saveHoldDraft);
+                reservationForm.addEventListener('change', saveHoldDraft);
             }
 
             updateAffiliation();

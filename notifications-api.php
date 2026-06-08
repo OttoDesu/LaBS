@@ -36,6 +36,9 @@ if ($action === 'mark_read') {
     ], $ok ? 200 : 500);
 }
 
+create_active_booking_hold_resume_notifications($mysqli, $user_id);
+create_due_booking_hold_reminders($mysqli, $user_id);
+
 $notifications = get_user_notifications($mysqli, $user_id, 12);
 $items = array_map(static function (array $item): array {
     return [

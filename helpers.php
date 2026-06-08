@@ -365,6 +365,7 @@ function ensure_booking_holds_table($mysqli) {
             booking_date DATE NOT NULL,
             time_slot VARCHAR(32) NOT NULL,
             expires_at DATETIME NOT NULL,
+            reminder_sent_at DATETIME DEFAULT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE KEY uq_booking_hold_slot (lab_id, booking_date, time_slot),
@@ -375,6 +376,24 @@ function ensure_booking_holds_table($mysqli) {
             CONSTRAINT fk_booking_holds_lab FOREIGN KEY (lab_id) REFERENCES labs(lab_id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ');
+
+    $column_exists = false;
+    $stmt = $mysqli->prepare("
+        SELECT column_name
+        FROM information_schema.COLUMNS
+        WHERE table_schema = DATABASE()
+          AND table_name = 'booking_holds'
+          AND column_name = 'reminder_sent_at'
+        LIMIT 1
+    ");
+    if ($stmt && $stmt->execute()) {
+        $result = $stmt->get_result();
+        $column_exists = (bool) ($result && $result->fetch_assoc());
+        $stmt->close();
+    }
+    if (!$column_exists) {
+        $mysqli->query('ALTER TABLE booking_holds ADD COLUMN reminder_sent_at DATETIME DEFAULT NULL AFTER expires_at');
+    }
 
     $ensured = true;
 }
@@ -542,11 +561,133 @@ function get_or_create_booking_hold($mysqli, int $user_id, int $lab_id, string $
         return ['ok' => false, 'error' => 'Unable to lock selected slots for confirmation.'];
     }
 
+    create_booking_hold_resume_notification($mysqli, $user_id, $lab_id, $booking_date, $time_slots, $hold_token);
+
     return [
         'ok' => true,
         'token' => $hold_token,
         'expires_at' => $expires_at
     ];
+}
+
+function create_booking_hold_resume_notification($mysqli, int $user_id, int $lab_id, string $booking_date, array $time_slots, string $hold_token): bool {
+    if (!$mysqli || $user_id <= 0 || $lab_id <= 0 || $booking_date === '' || !$time_slots || $hold_token === '') {
+        return false;
+    }
+
+    ensure_user_notifications_table($mysqli);
+
+    $lab_name = 'selected lab';
+    $stmt = $mysqli->prepare('SELECT lab_name FROM labs WHERE lab_id = ? LIMIT 1');
+    if ($stmt) {
+        $stmt->bind_param('i', $lab_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if ($row = $result->fetch_assoc()) {
+            $lab_name = (string) ($row['lab_name'] ?? $lab_name);
+        }
+        $stmt->close();
+    }
+
+    $time_slots = array_values(array_unique(array_filter(array_map('trim', $time_slots))));
+    $link_url = 'reservation-form.php?' . http_build_query([
+        'lab_id' => $lab_id,
+        'booking_date' => $booking_date,
+        'time_slots' => implode(',', $time_slots),
+        'booking_hold_token' => $hold_token
+    ]);
+    $message = 'Your booking form for ' . $lab_name . ' on ' . $booking_date
+        . ' (' . implode(', ', $time_slots) . ') is on hold. Open this notification to continue the form before the timer ends.';
+
+    $existing_stmt = $mysqli->prepare('
+        SELECT notification_id
+        FROM user_notifications
+        WHERE user_id = ?
+          AND title = "Booking on hold"
+          AND link_url = ?
+        LIMIT 1
+    ');
+    if ($existing_stmt) {
+        $existing_stmt->bind_param('is', $user_id, $link_url);
+        $existing_stmt->execute();
+        $existing_result = $existing_stmt->get_result();
+        $already_exists = (bool) ($existing_result && $existing_result->fetch_assoc());
+        $existing_stmt->close();
+        if ($already_exists) {
+            return true;
+        }
+    }
+
+    return create_user_notification($mysqli, $user_id, 'Booking on hold', $message, 'info', $link_url);
+}
+
+function get_active_booking_hold_resumes($mysqli, int $user_id, ?int $lab_id = null): array {
+    $user_id = (int) $user_id;
+    $lab_id = $lab_id !== null ? (int) $lab_id : null;
+    if (!$mysqli || $user_id <= 0) {
+        return [];
+    }
+
+    ensure_booking_holds_table($mysqli);
+    cleanup_expired_booking_holds($mysqli);
+
+    $where_lab = $lab_id !== null && $lab_id > 0 ? ' AND bh.lab_id = ?' : '';
+    $stmt = $mysqli->prepare('
+        SELECT bh.hold_token, bh.lab_id, bh.booking_date, bh.expires_at, l.lab_name,
+               GROUP_CONCAT(bh.time_slot ORDER BY bh.time_slot ASC SEPARATOR ", ") AS time_slots
+        FROM booking_holds bh
+        JOIN labs l ON l.lab_id = bh.lab_id
+        WHERE bh.user_id = ?
+          AND bh.expires_at > NOW()
+          ' . $where_lab . '
+        GROUP BY bh.hold_token, bh.lab_id, bh.booking_date, bh.expires_at, l.lab_name
+        ORDER BY bh.expires_at ASC
+    ');
+    if (!$stmt) {
+        return [];
+    }
+    if ($lab_id !== null && $lab_id > 0) {
+        $stmt->bind_param('ii', $user_id, $lab_id);
+    } else {
+        $stmt->bind_param('i', $user_id);
+    }
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    $holds = [];
+    while ($row = $result->fetch_assoc()) {
+        $time_slots = array_values(array_filter(array_map('trim', explode(',', (string) ($row['time_slots'] ?? '')))));
+        $link_url = 'reservation-form.php?' . http_build_query([
+            'lab_id' => (int) ($row['lab_id'] ?? 0),
+            'booking_date' => (string) ($row['booking_date'] ?? ''),
+            'time_slots' => implode(',', $time_slots),
+            'booking_hold_token' => (string) ($row['hold_token'] ?? '')
+        ]);
+        $row['time_slots'] = $time_slots;
+        $row['link_url'] = $link_url;
+        $holds[] = $row;
+    }
+    $stmt->close();
+
+    return $holds;
+}
+
+function create_active_booking_hold_resume_notifications($mysqli, int $user_id): int {
+    $created_count = 0;
+    foreach (get_active_booking_hold_resumes($mysqli, $user_id) as $hold) {
+        $created = create_booking_hold_resume_notification(
+            $mysqli,
+            $user_id,
+            (int) ($hold['lab_id'] ?? 0),
+            (string) ($hold['booking_date'] ?? ''),
+            $hold['time_slots'] ?? [],
+            (string) ($hold['hold_token'] ?? '')
+        );
+        if ($created) {
+            $created_count++;
+        }
+    }
+    return $created_count;
 }
 
 function validate_booking_hold($mysqli, string $hold_token, int $user_id, int $lab_id, string $booking_date, array $time_slots): array {
@@ -607,6 +748,77 @@ function release_booking_hold($mysqli, string $hold_token, int $user_id): void {
         $stmt->execute();
         $stmt->close();
     }
+}
+
+function create_due_booking_hold_reminders($mysqli, int $user_id): int {
+    $user_id = (int) $user_id;
+    if (!$mysqli || $user_id <= 0) {
+        return 0;
+    }
+
+    ensure_booking_holds_table($mysqli);
+    ensure_user_notifications_table($mysqli);
+    cleanup_expired_booking_holds($mysqli);
+
+    $holds = [];
+    $stmt = $mysqli->prepare('
+        SELECT bh.hold_token, bh.lab_id, bh.booking_date, bh.expires_at, l.lab_name,
+               GROUP_CONCAT(bh.time_slot ORDER BY bh.time_slot ASC SEPARATOR ", ") AS time_slots
+        FROM booking_holds bh
+        JOIN labs l ON l.lab_id = bh.lab_id
+        WHERE bh.user_id = ?
+          AND bh.expires_at > NOW()
+          AND bh.expires_at <= DATE_ADD(NOW(), INTERVAL 5 MINUTE)
+          AND bh.reminder_sent_at IS NULL
+        GROUP BY bh.hold_token, bh.lab_id, bh.booking_date, bh.expires_at, l.lab_name
+        ORDER BY bh.expires_at ASC
+    ');
+    if (!$stmt) {
+        return 0;
+    }
+    $stmt->bind_param('i', $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row = $result->fetch_assoc()) {
+        $holds[] = $row;
+    }
+    $stmt->close();
+
+    $created_count = 0;
+    foreach ($holds as $hold) {
+        $hold_token = (string) ($hold['hold_token'] ?? '');
+        $lab_id = (int) ($hold['lab_id'] ?? 0);
+        $booking_date = (string) ($hold['booking_date'] ?? '');
+        $time_slots = (string) ($hold['time_slots'] ?? '');
+        if ($hold_token === '' || $lab_id <= 0 || $booking_date === '' || $time_slots === '') {
+            continue;
+        }
+
+        $link_url = 'reservation-form.php?' . http_build_query([
+            'lab_id' => $lab_id,
+            'booking_date' => $booking_date,
+            'time_slots' => $time_slots,
+            'booking_hold_token' => $hold_token
+        ]);
+        $message = 'Your held booking for ' . ($hold['lab_name'] ?? 'selected lab') . ' on ' . $booking_date
+            . ' (' . $time_slots . ') expires in less than 5 minutes. Continue the form to finish the booking.';
+
+        if (create_user_notification($mysqli, $user_id, 'Finish your booking', $message, 'warning', $link_url)) {
+            $created_count++;
+            $update_stmt = $mysqli->prepare('
+                UPDATE booking_holds
+                SET reminder_sent_at = NOW(), updated_at = NOW()
+                WHERE hold_token = ? AND user_id = ? AND reminder_sent_at IS NULL
+            ');
+            if ($update_stmt) {
+                $update_stmt->bind_param('si', $hold_token, $user_id);
+                $update_stmt->execute();
+                $update_stmt->close();
+            }
+        }
+    }
+
+    return $created_count;
 }
 
 function create_user_notification($mysqli, int $user_id, string $title, string $message, string $type = 'info', ?string $link_url = null): bool {

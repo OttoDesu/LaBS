@@ -1319,6 +1319,27 @@ th {
     border: 1px solid #c8d8ff;
 }
 
+.hold-resume-link {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin: 18px 0 0;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.hold-resume-link:hover,
+.hold-resume-link:focus-visible {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.hold-resume-link.is-expired {
+    background: #fdecea;
+    color: var(--danger);
+    border-color: #f4b4ad;
+}
+
 .banner {
     display: flex;
     align-items: center;

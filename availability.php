@@ -8,6 +8,7 @@ $month = isset($_GET['month']) ? (int) $_GET['month'] : (int) date('n');
 $year = isset($_GET['year']) ? (int) $_GET['year'] : (int) date('Y');
 $user_type = $_SESSION['user_type'] ?? 'public';
 $is_lab_supervisor = is_lab_supervisor($user_type);
+$can_view_calendar_history = is_management_user($user_type);
 $booking_mode = $_GET['booking_mode'] ?? $_POST['booking_mode'] ?? 'slot';
 $booking_mode = $is_lab_supervisor && $booking_mode === 'group' ? 'group' : 'slot';
 
@@ -132,6 +133,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $start_date = sprintf('%04d-%02d-01', $year, $month);
 $end_date = date('Y-m-t', strtotime($start_date));
+$calendar_query_start_date = $start_date;
+if (!$can_view_calendar_history) {
+    $today_date = date('Y-m-d');
+    if ($calendar_query_start_date < $today_date) {
+        $calendar_query_start_date = $today_date;
+    }
+}
 $booked_by_date = [];
 $booked_details_by_date = [];
 
@@ -160,7 +168,7 @@ $stmt = $mysqli->prepare("
       AND b.status = 'Approved'
     ORDER BY b.booking_date ASC, b.time_slot ASC
 ");
-$stmt->bind_param('iss', $lab_id, $start_date, $end_date);
+$stmt->bind_param('iss', $lab_id, $calendar_query_start_date, $end_date);
 $stmt->execute();
 $result = $stmt->get_result();
 while ($row = $result->fetch_assoc()) {
@@ -209,7 +217,7 @@ $hold_stmt = $mysqli->prepare("
       AND h.expires_at > NOW()
     ORDER BY h.booking_date ASC, h.time_slot ASC
 ");
-$hold_stmt->bind_param('iss', $lab_id, $start_date, $end_date);
+$hold_stmt->bind_param('iss', $lab_id, $calendar_query_start_date, $end_date);
 $hold_stmt->execute();
 $hold_result = $hold_stmt->get_result();
 while ($row = $hold_result->fetch_assoc()) {
@@ -243,6 +251,16 @@ while ($row = $hold_result->fetch_assoc()) {
 $hold_stmt->close();
 
 $flash_info = get_flash('info');
+$active_hold_resumes = get_active_booking_hold_resumes($mysqli, $user_id, $lab_id);
+$active_hold_resume = $active_hold_resumes[0] ?? null;
+$active_hold_resume_expires_at_unix = 0;
+if ($active_hold_resume && !empty($active_hold_resume['expires_at'])) {
+    $active_hold_resume_expires_at_unix = (new DateTime(
+        (string) $active_hold_resume['expires_at'],
+        new DateTimeZone('Asia/Singapore')
+    ))->getTimestamp();
+}
+create_active_booking_hold_resume_notifications($mysqli, $user_id);
 $user_type = $_SESSION['user_type'] ?? 'public';
 $is_admin = is_admin_user($user_type);
 $is_lab_supervisor = is_lab_supervisor($user_type);
@@ -386,6 +404,19 @@ if ($next_month > 12) {
                             <a class="btn ghost" href="labs.php?cluster_id=<?php echo (int) $lab['cluster_id']; ?>">Choose another lab</a>
                         </div>
                     </div>
+                    <?php if ($active_hold_resume): ?>
+                        <a
+                            class="alert alert-info hold-resume-link"
+                            href="<?php echo htmlspecialchars($active_hold_resume['link_url']); ?>"
+                            data-hold-expires-at-unix="<?php echo (int) $active_hold_resume_expires_at_unix; ?>"
+                        >
+                            You have an unfinished booking form for this lab on <?php echo htmlspecialchars((string) ($active_hold_resume['booking_date'] ?? 'selected date')); ?>
+                            <?php if (!empty($active_hold_resume['time_slots'])): ?>
+                                (<?php echo htmlspecialchars(implode(', ', $active_hold_resume['time_slots'])); ?>)
+                            <?php endif; ?>
+                            . Time left: <span class="hold-resume-countdown">checking...</span>. Click here to continue before the hold timer ends.
+                        </a>
+                    <?php endif; ?>
                 </div>
 
                 <div class="availability-grid">
@@ -556,12 +587,39 @@ if ($next_month > 12) {
             'maintenanceLabel' => $maintenance_label,
             'bookingMode' => $booking_mode,
             'labName' => $lab['lab_name'],
-            'labId' => (int) $lab_id
+            'labId' => (int) $lab_id,
+            'canViewCalendarHistory' => $can_view_calendar_history
         ]); ?>;
     </script>
     <script src="assets/app.js?v=<?php echo (int) $app_js_version; ?>"></script>
     <script src="assets/booking.js?v=<?php echo (int) $booking_js_version; ?>"></script>
     <script>
+        (function () {
+            var holdResumeLink = document.querySelector('.hold-resume-link');
+            if (!holdResumeLink) {
+                return;
+            }
+            var countdown = holdResumeLink.querySelector('.hold-resume-countdown');
+            var expiresAtUnix = Number(holdResumeLink.getAttribute('data-hold-expires-at-unix') || '0');
+            function updateHoldResumeCountdown() {
+                if (!countdown || !expiresAtUnix) {
+                    return;
+                }
+                var remainingMs = (expiresAtUnix * 1000) - Date.now();
+                if (remainingMs <= 0) {
+                    countdown.textContent = '00:00';
+                    holdResumeLink.classList.add('is-expired');
+                    return;
+                }
+                var totalSeconds = Math.floor(remainingMs / 1000);
+                var minutes = Math.floor(totalSeconds / 60);
+                var seconds = totalSeconds % 60;
+                countdown.textContent = String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+            }
+            updateHoldResumeCountdown();
+            window.setInterval(updateHoldResumeCountdown, 1000);
+        })();
+
         (function () {
             var switcher = document.getElementById('booking-mode-switch');
             if (!switcher) {

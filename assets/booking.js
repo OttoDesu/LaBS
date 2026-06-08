@@ -322,6 +322,7 @@
         var maintenanceLabel = availability.maintenanceLabel || 'Maintenance schedule not set.';
         var labName = availability.labName || 'this lab';
         var labId = Number(availability.labId || 0);
+        var canViewCalendarHistory = availability.canViewCalendarHistory === true;
 
         var calendarGrid = document.getElementById('calendar-grid');
         var calendarTitle = document.getElementById('calendar-title');
@@ -646,14 +647,14 @@
             var cellIsPast = cellDate < today;
             var cellIsLeadRestricted = cellDate >= today && cellDate < minDate;
 
-            if (cellIsPast) {
+            if (cellIsPast && canViewCalendarHistory) {
                 cell.classList.add('past-viewable');
             }
-            if (cellIsLeadRestricted || cellIsMaintenance) {
+            if ((cellIsPast && !canViewCalendarHistory) || cellIsLeadRestricted || cellIsMaintenance) {
                 cell.classList.add('disabled');
             }
             cell.addEventListener('click', function () {
-                if (cellIsMaintenance || cellIsLeadRestricted) {
+                if (cellIsMaintenance || cellIsLeadRestricted || (cellIsPast && !canViewCalendarHistory)) {
                     return;
                 }
                 var selectedKey = this.getAttribute('data-date');

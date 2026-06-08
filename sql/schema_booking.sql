@@ -105,6 +105,40 @@ CREATE TABLE lab_reservations (
     CONSTRAINT fk_reservation_cluster FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE booking_holds (
+    hold_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    hold_token VARCHAR(64) NOT NULL,
+    user_id BIGINT(20) UNSIGNED NOT NULL,
+    lab_id BIGINT(20) UNSIGNED NOT NULL,
+    booking_date DATE NOT NULL,
+    time_slot VARCHAR(32) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    reminder_sent_at DATETIME DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_booking_hold_slot (lab_id, booking_date, time_slot),
+    KEY idx_booking_hold_token (hold_token),
+    KEY idx_booking_hold_user (user_id),
+    KEY idx_booking_hold_expiry (expires_at),
+    CONSTRAINT fk_booking_holds_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_booking_holds_lab FOREIGN KEY (lab_id) REFERENCES labs(lab_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE user_notifications (
+    notification_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT(20) UNSIGNED NOT NULL,
+    notification_type VARCHAR(32) NOT NULL DEFAULT 'info',
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    link_url VARCHAR(255) DEFAULT NULL,
+    is_read TINYINT(1) NOT NULL DEFAULT 0,
+    read_at DATETIME DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_user_notifications_user (user_id, is_read, created_at),
+    CONSTRAINT fk_user_notifications_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE reservation_equipment (
     equipment_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     reservation_id BIGINT(20) UNSIGNED NOT NULL,
