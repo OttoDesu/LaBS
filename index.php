@@ -31,10 +31,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errors) {
         if ($user_type === 'uthm') {
-            $stmt = $mysqli->prepare("SELECT id, name, email, password, user_type, cluster_id FROM users WHERE email = ? AND user_type IN ('uthm_staff', 'uthm_student', 'super_admin', 'cluster_admin', 'lab_supervisor', 'admin') LIMIT 1");
+            $stmt = $mysqli->prepare("SELECT id, name, email, password, user_type, cluster_id FROM users 
+            WHERE email = ? AND user_type IN ('uthm_staff', 'uthm_student', 'super_admin', 'cluster_admin', 'lab_supervisor', 'admin') LIMIT 1");
             $stmt->bind_param('s', $email);
         } else {
-            $stmt = $mysqli->prepare('SELECT id, name, email, password, user_type, cluster_id FROM users WHERE email = ? AND user_type = ? LIMIT 1');
+            $stmt = $mysqli->prepare('SELECT id, name, email, password, user_type, cluster_id FROM users 
+            WHERE email = ? AND user_type = ? LIMIT 1');
             $stmt->bind_param('ss', $email, $user_type);
         }
         $stmt->execute();
@@ -79,7 +81,6 @@ $flash_signup = get_flash('signup_success');
         <div class="split-left">
             <div class="card">
             <h1>Sign In</h1>
-            <p class="subtitle">Enter your email and password to sign in!</p>
 
             <?php if ($flash_error): ?>
                 <div class="alert alert-error"><?php echo htmlspecialchars($flash_error); ?></div>

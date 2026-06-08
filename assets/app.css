@@ -357,7 +357,7 @@ body {
 }
 
 .notification-menu-list {
-    max-height: 420px;
+    max-height: 246px;
     overflow-y: auto;
     display: grid;
 }
@@ -2769,6 +2769,16 @@ th {
     background: linear-gradient(180deg, #ffffff 0%, #eef5ff 100%);
 }
 
+#booked-slots-modal .booked-slot-modal-item.booking-type-booked {
+    border-color: rgba(47, 158, 68, 0.22);
+    background: linear-gradient(180deg, #ffffff 0%, #eefbf1 100%);
+}
+
+#booked-slots-modal .booked-slot-modal-item.booking-type-hold {
+    border-color: rgba(168, 85, 247, 0.24);
+    background: linear-gradient(180deg, #fffaff 0%, #f6efff 100%);
+}
+
 #booked-slots-modal .booked-slot-modal-time {
     display: inline-flex;
     align-items: center;
@@ -2814,6 +2824,16 @@ th {
     color: #2556c8;
 }
 
+#booked-slots-modal .booked-slot-type-badge.type-booked {
+    background: #dcfce7;
+    color: #166534;
+}
+
+#booked-slots-modal .booked-slot-type-badge.type-hold {
+    background: #efe1ff;
+    color: #7c3aed;
+}
+
 #booked-slots-modal .booked-slot-modal-booking {
     color: var(--text);
     font-weight: 600;
@@ -2836,6 +2856,50 @@ th {
 #booked-slots-modal .booked-slot-edit-button:focus-visible {
     background: #eef5ff;
     color: #163a70;
+}
+
+.booking-hold-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border: 1px solid #facc15;
+    border-radius: 14px;
+    background: linear-gradient(180deg, #fffdf2 0%, #fff7d6 100%);
+    color: #7c5b00;
+}
+
+.booking-hold-banner strong {
+    font-size: 14px;
+}
+
+.booking-hold-copy {
+    display: grid;
+    gap: 4px;
+}
+
+.booking-hold-note {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #8a6d00;
+}
+
+.booking-hold-countdown {
+    font-weight: 700;
+    color: #9a6700;
+    white-space: nowrap;
+}
+
+.booking-hold-banner.is-expired {
+    border-color: #fca5a5;
+    background: linear-gradient(180deg, #fff7f7 0%, #feeaea 100%);
+    color: #b42318;
+}
+
+.booking-hold-banner.is-expired .booking-hold-countdown {
+    color: #b42318;
 }
 
 @media (max-width: 1366px) {

@@ -3,3 +3,20 @@
 [2026-06-01 20:07:24] PHPMailer sent: LaBS Password Reset Code -> ci230027@student.uthm.edu.my
 [2026-06-01 20:42:35] PHPMailer sent: Booking cancelled for your lab -> mim.haura@gmail.com
 [2026-06-01 20:42:39] PHPMailer sent: Booking cancelled for your lab -> ksgt@uthm.edu.my
+[2026-06-05 08:15:50] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-06-05 08:16:05] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-06-05 08:19:29] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-06-05 08:19:44] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-06-05 08:20:11] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-06-05 08:20:33] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-06-05 08:22:21] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-06-05 08:22:42] PHPMailer sent: LaBS Password Reset Code -> ci230027@student.uthm.edu.my
+[2026-06-07 19:54:28] PHPMailer sent: Lab booking submitted -> anisfaqihah58@gmail.com
+[2026-06-07 19:54:33] PHPMailer sent: New lab booking for your lab -> mim.haura@gmail.com
+[2026-06-07 19:54:38] PHPMailer sent: New lab booking for your lab -> ksgt@uthm.edu.my
+[2026-06-07 19:55:45] PHPMailer sent: Booking cancelled for your lab -> mim.haura@gmail.com
+[2026-06-07 19:55:51] PHPMailer sent: Booking cancelled for your lab -> ksgt@uthm.edu.my
+[2026-06-07 20:00:48] PHPMailer sent: Booking rejected -> anisfaqihah58@gmail.com
+[2026-06-07 20:00:53] PHPMailer sent: Booking rejected in your cluster -> ksgt@uthm.edu.my
+[2026-06-07 20:13:25] PHPMailer sent: Group booking submitted -> mim.haura@gmail.com
+[2026-06-07 20:13:30] PHPMailer sent: New group booking for your lab -> ksgt@uthm.edu.my

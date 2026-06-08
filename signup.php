@@ -46,7 +46,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'An account with this email already exists.';
         } else {
             $hashed = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $mysqli->prepare('INSERT INTO users (name, ic_no, email, password, user_type, created_at, updated_at) VALUES (?, ?, ?, ?, "public", NOW(), NOW())');
+            $stmt = $mysqli->prepare('INSERT INTO users (name, ic_no, email, password, user_type, created_at, updated_at) 
+            VALUES (?, ?, ?, ?, "public", NOW(), NOW())');
             $stmt->bind_param('ssss', $name, $ic_no, $email, $hashed);
             if ($stmt->execute()) {
                 $stmt->close();

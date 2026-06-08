@@ -339,9 +339,13 @@ if ($is_management) {
     if ($status_filter === 'all') {
         $stmt = $mysqli->prepare('
             SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason,
-                   lb.cancellation_reason, lb.created_at, l.lab_name
+                   lb.cancellation_reason, lb.created_at, l.lab_name, c.cluster_name,
+                   lr.title, lr.activity_details, lr.start_time, lr.end_time, lr.full_name,
+                   lr.email AS reservation_email, lr.phone
             FROM lab_bookings lb
             JOIN labs l ON lb.lab_id = l.lab_id
+            JOIN clusters c ON c.cluster_id = l.cluster_id
+            LEFT JOIN lab_reservations lr ON lr.booking_id = lb.' . $booking_pk . '
             WHERE lb.user_id = ?
               AND (l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
             ORDER BY lb.created_at DESC
@@ -350,9 +354,13 @@ if ($is_management) {
     } else {
         $stmt = $mysqli->prepare('
             SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason,
-                   lb.cancellation_reason, lb.created_at, l.lab_name
+                   lb.cancellation_reason, lb.created_at, l.lab_name, c.cluster_name,
+                   lr.title, lr.activity_details, lr.start_time, lr.end_time, lr.full_name,
+                   lr.email AS reservation_email, lr.phone
             FROM lab_bookings lb
             JOIN labs l ON lb.lab_id = l.lab_id
+            JOIN clusters c ON c.cluster_id = l.cluster_id
+            LEFT JOIN lab_reservations lr ON lr.booking_id = lb.' . $booking_pk . '
             WHERE lb.user_id = ?
               AND (l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
               AND lb.status = ?
@@ -363,6 +371,10 @@ if ($is_management) {
     $stmt->execute();
     $result = $stmt->get_result();
     while ($row = $result->fetch_assoc()) {
+        $calendar_payload = build_booking_calendar_payload($row);
+        $row['google_calendar_url'] = ($row['status'] ?? '') === 'Approved' && $calendar_payload
+            ? build_google_calendar_url($calendar_payload)
+            : '';
         $bookings[] = $row;
     }
     $stmt->close();
@@ -605,6 +617,9 @@ $active = 'dashboard';
                                             <td>
                                                 <div class="action-buttons">
                                                     <a class="btn ghost small" href="booking-receipt.php?booking_id=<?php echo (int) $booking['booking_id']; ?>" target="_blank" rel="noopener">View/Print</a>
+                                                    <?php if (!empty($booking['google_calendar_url'])): ?>
+                                                        <a class="btn ghost small" href="<?php echo htmlspecialchars($booking['google_calendar_url']); ?>" target="_blank" rel="noopener">Add to Google Calendar</a>
+                                                    <?php endif; ?>
                                                     <?php if ($booking['status'] === 'Approved'): ?>
                                                         <button
                                                             class="btn ghost small cancel-booking"
@@ -612,7 +627,7 @@ $active = 'dashboard';
                                                             data-booking-id="<?php echo (int) $booking['booking_id']; ?>"
                                                             data-booking-label="<?php echo htmlspecialchars($booking['lab_name']); ?>"
                                                         >
-                                                            Cancel
+                                                            Cancel Booking
                                                         </button>
                                                     <?php endif; ?>
                                                 </div>

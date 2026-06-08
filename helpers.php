@@ -350,6 +350,265 @@ function ensure_user_notifications_table($mysqli) {
     $ensured = true;
 }
 
+function ensure_booking_holds_table($mysqli) {
+    static $ensured = false;
+    if ($ensured || !$mysqli) {
+        return;
+    }
+
+    $mysqli->query('
+        CREATE TABLE IF NOT EXISTS booking_holds (
+            hold_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            hold_token VARCHAR(64) NOT NULL,
+            user_id BIGINT(20) UNSIGNED NOT NULL,
+            lab_id BIGINT(20) UNSIGNED NOT NULL,
+            booking_date DATE NOT NULL,
+            time_slot VARCHAR(32) NOT NULL,
+            expires_at DATETIME NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_booking_hold_slot (lab_id, booking_date, time_slot),
+            KEY idx_booking_hold_token (hold_token),
+            KEY idx_booking_hold_user (user_id),
+            KEY idx_booking_hold_expiry (expires_at),
+            CONSTRAINT fk_booking_holds_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            CONSTRAINT fk_booking_holds_lab FOREIGN KEY (lab_id) REFERENCES labs(lab_id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ');
+
+    $ensured = true;
+}
+
+function cleanup_expired_booking_holds($mysqli): void {
+    if (!$mysqli) {
+        return;
+    }
+    $mysqli->query('DELETE FROM booking_holds WHERE expires_at <= NOW()');
+}
+
+function labs_generate_hold_token(): string {
+    try {
+        return 'hold_' . bin2hex(random_bytes(16));
+    } catch (Throwable $throwable) {
+        return 'hold_' . uniqid('', true);
+    }
+}
+
+function get_or_create_booking_hold($mysqli, int $user_id, int $lab_id, string $booking_date, array $time_slots, int $hold_minutes = 15): array {
+    if (!$mysqli || $user_id <= 0 || $lab_id <= 0 || $booking_date === '' || !$time_slots) {
+        return ['ok' => false, 'error' => 'Invalid hold request.'];
+    }
+
+    cleanup_expired_booking_holds($mysqli);
+    $time_slots = array_values(array_unique(array_filter(array_map('trim', $time_slots))));
+    sort($time_slots);
+
+    $existing_rows = [];
+    $stmt = $mysqli->prepare('
+        SELECT hold_token, time_slot, expires_at
+        FROM booking_holds
+        WHERE user_id = ?
+          AND lab_id = ?
+          AND booking_date = ?
+          AND expires_at > NOW()
+        ORDER BY hold_token ASC, time_slot ASC
+    ');
+    if ($stmt) {
+        $stmt->bind_param('iis', $user_id, $lab_id, $booking_date);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) {
+            $existing_rows[] = $row;
+        }
+        $stmt->close();
+    }
+
+    if ($existing_rows) {
+        $existing_token = (string) ($existing_rows[0]['hold_token'] ?? '');
+        $existing_expiry = (string) ($existing_rows[0]['expires_at'] ?? '');
+        $existing_slots = [];
+        $same_token = true;
+        foreach ($existing_rows as $row) {
+            $existing_slots[] = trim((string) ($row['time_slot'] ?? ''));
+            if ((string) ($row['hold_token'] ?? '') !== $existing_token) {
+                $same_token = false;
+            }
+        }
+        sort($existing_slots);
+        if ($same_token && $existing_slots === $time_slots) {
+            return [
+                'ok' => true,
+                'token' => $existing_token,
+                'expires_at' => $existing_expiry
+            ];
+        }
+    }
+
+    $approved_stmt = $mysqli->prepare('
+        SELECT 1
+        FROM lab_bookings
+        WHERE lab_id = ?
+          AND booking_date = ?
+          AND time_slot = ?
+          AND status = "Approved"
+        LIMIT 1
+    ');
+    $hold_conflict_stmt = $mysqli->prepare('
+        SELECT 1
+        FROM booking_holds
+        WHERE lab_id = ?
+          AND booking_date = ?
+          AND time_slot = ?
+          AND expires_at > NOW()
+        LIMIT 1
+    ');
+    if (!$approved_stmt || !$hold_conflict_stmt) {
+        if ($approved_stmt) {
+            $approved_stmt->close();
+        }
+        if ($hold_conflict_stmt) {
+            $hold_conflict_stmt->close();
+        }
+        return ['ok' => false, 'error' => 'Unable to prepare booking hold.'];
+    }
+
+    foreach ($time_slots as $slot) {
+        $approved_stmt->bind_param('iss', $lab_id, $booking_date, $slot);
+        $approved_stmt->execute();
+        $approved_result = $approved_stmt->get_result();
+        if ($approved_result && $approved_result->fetch_assoc()) {
+            $approved_stmt->close();
+            $hold_conflict_stmt->close();
+            return ['ok' => false, 'error' => 'One or more selected slots are already booked.'];
+        }
+
+        $hold_conflict_stmt->bind_param('iss', $lab_id, $booking_date, $slot);
+        $hold_conflict_stmt->execute();
+        $hold_result = $hold_conflict_stmt->get_result();
+        if ($hold_result && $hold_result->fetch_assoc()) {
+            $approved_stmt->close();
+            $hold_conflict_stmt->close();
+            return ['ok' => false, 'error' => 'One or more selected slots are temporarily held by another user.'];
+        }
+    }
+    $approved_stmt->close();
+    $hold_conflict_stmt->close();
+
+    $hold_token = labs_generate_hold_token();
+    $hold_minutes = max(1, $hold_minutes);
+    $expires_at = '';
+    $expiry_stmt = $mysqli->prepare('SELECT DATE_FORMAT(DATE_ADD(NOW(), INTERVAL ? MINUTE), "%Y-%m-%d %H:%i:%s") AS expires_at');
+    if ($expiry_stmt) {
+        $expiry_stmt->bind_param('i', $hold_minutes);
+        $expiry_stmt->execute();
+        $expiry_result = $expiry_stmt->get_result();
+        $expiry_row = $expiry_result ? $expiry_result->fetch_assoc() : null;
+        $expires_at = (string) ($expiry_row['expires_at'] ?? '');
+        $expiry_stmt->close();
+    }
+    if ($expires_at === '') {
+        return ['ok' => false, 'error' => 'Unable to calculate booking hold expiry.'];
+    }
+
+    $mysqli->begin_transaction();
+    try {
+        $delete_stmt = $mysqli->prepare('
+            DELETE FROM booking_holds
+            WHERE user_id = ?
+              AND lab_id = ?
+              AND booking_date = ?
+        ');
+        if ($delete_stmt) {
+            $delete_stmt->bind_param('iis', $user_id, $lab_id, $booking_date);
+            $delete_stmt->execute();
+            $delete_stmt->close();
+        }
+
+        $insert_stmt = $mysqli->prepare('
+            INSERT INTO booking_holds (hold_token, user_id, lab_id, booking_date, time_slot, expires_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
+        ');
+        if (!$insert_stmt) {
+            throw new Exception('Unable to create booking hold.');
+        }
+        foreach ($time_slots as $slot) {
+            $insert_stmt->bind_param('siisss', $hold_token, $user_id, $lab_id, $booking_date, $slot, $expires_at);
+            $insert_stmt->execute();
+        }
+        $insert_stmt->close();
+        $mysqli->commit();
+    } catch (Throwable $throwable) {
+        $mysqli->rollback();
+        return ['ok' => false, 'error' => 'Unable to lock selected slots for confirmation.'];
+    }
+
+    return [
+        'ok' => true,
+        'token' => $hold_token,
+        'expires_at' => $expires_at
+    ];
+}
+
+function validate_booking_hold($mysqli, string $hold_token, int $user_id, int $lab_id, string $booking_date, array $time_slots): array {
+    if (!$mysqli || $hold_token === '' || $user_id <= 0 || $lab_id <= 0 || $booking_date === '' || !$time_slots) {
+        return ['ok' => false, 'error' => 'Booking hold is missing.'];
+    }
+
+    cleanup_expired_booking_holds($mysqli);
+    $time_slots = array_values(array_unique(array_filter(array_map('trim', $time_slots))));
+    sort($time_slots);
+
+    $rows = [];
+    $stmt = $mysqli->prepare('
+        SELECT time_slot, expires_at
+        FROM booking_holds
+        WHERE hold_token = ?
+          AND user_id = ?
+          AND lab_id = ?
+          AND booking_date = ?
+          AND expires_at > NOW()
+        ORDER BY time_slot ASC
+    ');
+    if ($stmt) {
+        $stmt->bind_param('siis', $hold_token, $user_id, $lab_id, $booking_date);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) {
+            $rows[] = $row;
+        }
+        $stmt->close();
+    }
+
+    if (!$rows) {
+        return ['ok' => false, 'error' => 'Your 15-minute hold has expired. Please select the slot again.'];
+    }
+
+    $held_slots = [];
+    $expires_at = (string) ($rows[0]['expires_at'] ?? '');
+    foreach ($rows as $row) {
+        $held_slots[] = trim((string) ($row['time_slot'] ?? ''));
+    }
+    sort($held_slots);
+
+    if ($held_slots !== $time_slots) {
+        return ['ok' => false, 'error' => 'Selected slot hold is no longer valid. Please select the slot again.'];
+    }
+
+    return ['ok' => true, 'expires_at' => $expires_at];
+}
+
+function release_booking_hold($mysqli, string $hold_token, int $user_id): void {
+    if (!$mysqli || $hold_token === '' || $user_id <= 0) {
+        return;
+    }
+    $stmt = $mysqli->prepare('DELETE FROM booking_holds WHERE hold_token = ? AND user_id = ?');
+    if ($stmt) {
+        $stmt->bind_param('si', $hold_token, $user_id);
+        $stmt->execute();
+        $stmt->close();
+    }
+}
+
 function create_user_notification($mysqli, int $user_id, string $title, string $message, string $type = 'info', ?string $link_url = null): bool {
     $user_id = (int) $user_id;
     if (!$mysqli || $user_id <= 0) {

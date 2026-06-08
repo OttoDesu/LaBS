@@ -292,6 +292,9 @@ $field_errors = [];
 $booking_pk = get_booking_pk_column($mysqli);
 $edit_group_booking_source = null;
 $delete_group_booking_requested = $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_group_booking']);
+$booking_hold_token = trim((string) ($_POST['booking_hold_token'] ?? $_GET['booking_hold_token'] ?? ''));
+$booking_hold_expires_at = '';
+$booking_hold_expires_at_unix = 0;
 
 if ($is_lab_supervisor && $edit_group_reservation_id > 0) {
     $stmt = $mysqli->prepare('
@@ -469,7 +472,72 @@ if ($is_edit_group_booking && $edit_group_booking_source && $_SERVER['REQUEST_ME
     }
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+$slot_hold_min_date = (new DateTime('today'))->modify('+3 days')->format('Y-m-d');
+if (
+    !$is_edit_group_booking
+    && $booking_mode === 'slot'
+    && preg_match('/^\d{4}-\d{2}-\d{2}$/', $booking_date)
+    && $booking_date >= $slot_hold_min_date
+    && !is_lab_under_maintenance($lab, $booking_date)
+    && !empty($selected_time_slots)
+) {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if ($booking_hold_token === '') {
+            $hold_result = get_or_create_booking_hold($mysqli, $user_id, $lab_id, $booking_date, $selected_time_slots, 15);
+            if ($hold_result['ok'] ?? false) {
+                $booking_hold_token = (string) ($hold_result['token'] ?? '');
+                $booking_hold_expires_at = (string) ($hold_result['expires_at'] ?? '');
+                $booking_hold_expires_at_unix = $booking_hold_expires_at !== ''
+                    ? (new DateTime($booking_hold_expires_at, new DateTimeZone('Asia/Singapore')))->getTimestamp()
+                    : 0;
+                if (!isset($_POST['title']) && !isset($_POST['activity_details'])) {
+                    $redirect_query = http_build_query([
+                        'lab_id' => $lab_id,
+                        'booking_date' => $booking_date,
+                        'time_slots' => implode(',', $selected_time_slots),
+                        'booking_hold_token' => $booking_hold_token
+                    ]);
+                    header('Location: reservation-form.php?' . $redirect_query);
+                    exit;
+                }
+            } else {
+                $errors[] = (string) ($hold_result['error'] ?? 'Unable to lock selected slots for confirmation.');
+            }
+        } else {
+            $hold_validation = validate_booking_hold($mysqli, $booking_hold_token, $user_id, $lab_id, $booking_date, $selected_time_slots);
+            if ($hold_validation['ok'] ?? false) {
+                $booking_hold_expires_at = (string) ($hold_validation['expires_at'] ?? '');
+                $booking_hold_expires_at_unix = $booking_hold_expires_at !== ''
+                    ? (new DateTime($booking_hold_expires_at, new DateTimeZone('Asia/Singapore')))->getTimestamp()
+                    : 0;
+            } else {
+                $errors[] = (string) ($hold_validation['error'] ?? 'Your slot hold is no longer valid. Please select the slot again.');
+            }
+        }
+    } else {
+        $hold_result = get_or_create_booking_hold($mysqli, $user_id, $lab_id, $booking_date, $selected_time_slots, 15);
+        if ($hold_result['ok'] ?? false) {
+            $booking_hold_token = (string) ($hold_result['token'] ?? '');
+            $booking_hold_expires_at = (string) ($hold_result['expires_at'] ?? '');
+            $booking_hold_expires_at_unix = $booking_hold_expires_at !== ''
+                ? (new DateTime($booking_hold_expires_at, new DateTimeZone('Asia/Singapore')))->getTimestamp()
+                : 0;
+        } else {
+            set_flash('info', (string) ($hold_result['error'] ?? 'Selected slots are no longer available.'));
+            header('Location: availability.php?lab_id=' . (int) $lab_id);
+            exit;
+        }
+    }
+}
+
+$is_initial_slot_handoff = $_SERVER['REQUEST_METHOD'] === 'POST'
+    && !$is_edit_group_booking
+    && $booking_mode === 'slot'
+    && $booking_hold_token !== ''
+    && !isset($_POST['title'])
+    && !isset($_POST['activity_details']);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_initial_slot_handoff) {
     $equipment_names = $_POST['equipment_name'] ?? [];
     $equipment_qty = $_POST['equipment_qty'] ?? [];
     $equipment_notes = $_POST['equipment_notes'] ?? [];
@@ -1205,6 +1273,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $chemical_stmt->close();
             }
 
+            if ($booking_mode === 'slot' && $booking_hold_token !== '') {
+                release_booking_hold($mysqli, $booking_hold_token, $user_id);
+            }
+
             if ($booking_purpose === 'class') {
                 sync_user_profile_from_booking_form(
                     $mysqli,
@@ -1492,9 +1564,20 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                         <input type="hidden" name="time_slots" value="<?php echo htmlspecialchars(json_encode($selected_time_slots)); ?>">
                         <input type="hidden" name="start_time" value="<?php echo htmlspecialchars($start_time); ?>">
                         <input type="hidden" name="end_time" value="<?php echo htmlspecialchars($end_time); ?>">
+                        <input type="hidden" name="booking_hold_token" value="<?php echo htmlspecialchars($booking_hold_token); ?>">
                         <input type="hidden" id="booking-mode" name="booking_mode" value="<?php echo htmlspecialchars($form_values['booking_mode']); ?>">
                         <?php if ($is_edit_group_booking): ?>
                             <input type="hidden" name="edit_group_reservation_id" value="<?php echo (int) $edit_group_reservation_id; ?>">
+                        <?php endif; ?>
+
+                        <?php if ($booking_mode === 'slot' && $booking_hold_expires_at_unix > 0): ?>
+                            <div class="alert alert-warning booking-hold-banner" data-hold-expires-at-unix="<?php echo (int) $booking_hold_expires_at_unix; ?>">
+                                <div class="booking-hold-copy">
+                                    <strong>Selected slots are locked for 15 minutes.</strong>
+                                    <span class="booking-hold-note">If you leave without submitting, the selected date and time remain locked until the timer ends.</span>
+                                </div>
+                                <span class="booking-hold-countdown">Time remaining: 15:00</span>
+                            </div>
                         <?php endif; ?>
 
                         <div class="form-section" id="lab-details-section">
@@ -2250,6 +2333,34 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                     }
                     groupSessionList.appendChild(createGroupSessionRow(getGroupDefaultSession()));
                 });
+            }
+
+            var bookingHoldBanner = document.querySelector('.booking-hold-banner');
+            if (bookingHoldBanner) {
+                var bookingHoldCountdown = bookingHoldBanner.querySelector('.booking-hold-countdown');
+                var holdExpiresAtUnix = Number(bookingHoldBanner.getAttribute('data-hold-expires-at-unix') || '0');
+
+                function updateBookingHoldCountdown() {
+                    if (!bookingHoldCountdown || !holdExpiresAtUnix) {
+                        return;
+                    }
+                    var remainingMs = (holdExpiresAtUnix * 1000) - Date.now();
+                    if (remainingMs <= 0) {
+                        bookingHoldCountdown.textContent = 'Time remaining: 00:00';
+                        bookingHoldBanner.classList.add('is-expired');
+                        if (submitButton) {
+                            submitButton.disabled = true;
+                        }
+                        return;
+                    }
+                    var totalSeconds = Math.floor(remainingMs / 1000);
+                    var minutes = Math.floor(totalSeconds / 60);
+                    var seconds = totalSeconds % 60;
+                    bookingHoldCountdown.textContent = 'Time remaining: ' + String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+                }
+
+                updateBookingHoldCountdown();
+                window.setInterval(updateBookingHoldCountdown, 1000);
             }
 
             updateAffiliation();

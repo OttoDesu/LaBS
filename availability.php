@@ -142,6 +142,7 @@ $stmt = $mysqli->prepare("
         b.booking_date,
         b.time_slot,
         r.reservation_id,
+        r.created_at AS reservation_created_at,
         COALESCE(NULLIF(r.title, ''), NULLIF(r.class_course_code, ''), NULLIF(r.class_subject_name, ''), 'Booked')
             AS booking_label,
         CASE
@@ -150,7 +151,8 @@ $stmt = $mysqli->prepare("
             ELSE 'lab'
         END AS booking_type,
         r.booking_mode,
-        r.group_booking_key
+        r.group_booking_key,
+        r.activity_details
     FROM lab_bookings b
     LEFT JOIN lab_reservations r ON r.booking_id = b.{$booking_pk}
     WHERE b.lab_id = ?
@@ -178,12 +180,67 @@ while ($row = $result->fetch_assoc()) {
         'booking_type' => $row['booking_type'],
         'booking_mode' => $row['booking_mode'] ?? 'slot',
         'group_booking_key' => $row['group_booking_key'] ?? null,
+        'modal_group_key' => ($row['group_booking_key'] ?? '') !== ''
+            ? (string) $row['group_booking_key']
+            : implode('|', [
+                'slot',
+                (string) ($row['user_id'] ?? 0),
+                (string) ($row['booking_date'] ?? ''),
+                (string) ($row['reservation_created_at'] ?? ''),
+                (string) ($row['booking_label'] ?? ''),
+                (string) ($row['activity_details'] ?? '')
+            ]),
         'can_edit_group' => $is_lab_supervisor
             && (($row['booking_mode'] ?? 'slot') === 'group')
             && ((int) ($row['user_id'] ?? 0) === $user_id)
     ];
 }
 $stmt->close();
+
+$hold_stmt = $mysqli->prepare("
+    SELECT
+        h.user_id,
+        h.booking_date,
+        h.time_slot,
+        h.expires_at
+    FROM booking_holds h
+    WHERE h.lab_id = ?
+      AND h.booking_date BETWEEN ? AND ?
+      AND h.expires_at > NOW()
+    ORDER BY h.booking_date ASC, h.time_slot ASC
+");
+$hold_stmt->bind_param('iss', $lab_id, $start_date, $end_date);
+$hold_stmt->execute();
+$hold_result = $hold_stmt->get_result();
+while ($row = $hold_result->fetch_assoc()) {
+    $date_key = $row['booking_date'];
+    if (!isset($booked_by_date[$date_key])) {
+        $booked_by_date[$date_key] = [];
+    }
+    if (!in_array($row['time_slot'], $booked_by_date[$date_key], true)) {
+        $booked_by_date[$date_key][] = $row['time_slot'];
+    }
+    if (!isset($booked_details_by_date[$date_key])) {
+        $booked_details_by_date[$date_key] = [];
+    }
+    $booked_details_by_date[$date_key][] = [
+        'booking_id' => 0,
+        'reservation_id' => 0,
+        'time_slot' => $row['time_slot'],
+        'label' => 'Temporarily reserved (15-minute hold)',
+        'booking_type' => 'hold',
+        'booking_mode' => 'hold',
+        'group_booking_key' => null,
+        'modal_group_key' => implode('|', [
+            'hold',
+            (string) ($row['user_id'] ?? 0),
+            (string) ($row['booking_date'] ?? ''),
+            (string) ($row['expires_at'] ?? '')
+        ]),
+        'can_edit_group' => false
+    ];
+}
+$hold_stmt->close();
 
 $flash_info = get_flash('info');
 $user_type = $_SESSION['user_type'] ?? 'public';

@@ -37,7 +37,7 @@ $role_heading = 'Booking analytics by year, month, week, or specific date';
 $role_description = 'Loaded with AJAX without refreshing the page';
 
 if ($is_super_admin) {
-    $role_badge = 'Super Admin Report';
+    $role_badge = 'Admin Report';
 } elseif ($is_cluster_admin) {
     $role_badge = 'Cluster Admin Report';
     $role_description = 'Report is limited to your assigned cluster.';

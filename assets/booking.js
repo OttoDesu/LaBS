@@ -447,12 +447,13 @@
             var groups = [];
             bookedSlotDetails.forEach(function (item) {
                 var label = item && item.label ? item.label : 'Booked';
-                var bookingType = item && item.booking_type === 'lecture' ? 'lecture' : 'lab';
-                var bookingMode = item && item.booking_mode === 'group' ? 'group' : 'slot';
+                var bookingType = item && item.booking_type ? String(item.booking_type) : 'booked';
+                var bookingMode = item && item.booking_mode ? String(item.booking_mode) : 'slot';
+                var modalGroupKey = item && item.modal_group_key ? String(item.modal_group_key) : '';
                 var groupKeySource = item && item.group_booking_key ? String(item.group_booking_key) : '';
                 var identity = bookingMode === 'group'
-                    ? ['group', groupKeySource || label, bookingType].join('|')
-                    : ['slot', label, bookingType, String(item && item.reservation_id ? item.reservation_id : item && item.booking_id ? item.booking_id : item && item.time_slot ? item.time_slot : '')].join('|');
+                    ? ['group', groupKeySource || modalGroupKey || label, bookingType].join('|')
+                    : ['slot', modalGroupKey || label, bookingType].join('|');
                 var bounds = slotBounds(item && item.time_slot ? item.time_slot : '');
                 var previous = groups.length ? groups[groups.length - 1] : null;
 
@@ -507,8 +508,19 @@
             }
             bookedSlotsModalList.innerHTML = groupedSlotDetails.map(function (item) {
                 var label = item && item.label ? item.label : 'Booked';
-                var bookingType = item && item.booking_type === 'lecture' ? 'lecture' : 'lab';
-                var bookingTypeLabel = bookingType === 'lecture' ? 'Lecture' : 'Lab';
+                var bookingType = 'booked';
+                if (item && item.booking_type === 'lecture') {
+                    bookingType = 'lecture';
+                } else if (item && item.booking_type === 'lab' && item && item.booking_mode === 'group') {
+                    bookingType = 'lab';
+                } else if (item && item.booking_type === 'hold') {
+                    bookingType = 'hold';
+                }
+                var bookingTypeLabel = bookingType === 'lecture'
+                    ? 'Lecture'
+                    : (bookingType === 'lab'
+                        ? 'Lab'
+                        : (bookingType === 'hold' ? 'On Hold' : 'Booked'));
                 var editButton = '';
                 if (item && item.can_edit_group && Number(item.reservation_id || 0) > 0 && labId > 0) {
                     var editUrl = 'reservation-form.php?lab_id=' + encodeURIComponent(String(labId)) +

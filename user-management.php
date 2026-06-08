@@ -799,8 +799,6 @@ $active = 'user-management';
                     <?php if ($is_super_admin): ?>
                         <option value="cluster_admin"<?php echo $add_role === 'cluster_admin' ? ' selected' : ''; ?>>Cluster Admin</option>
                         <option value="lab_supervisor"<?php echo $add_role === 'lab_supervisor' ? ' selected' : ''; ?>>Lab Supervisor</option>
-                        <option value="super_admin"<?php echo $add_role === 'super_admin' ? ' selected' : ''; ?>>Super Admin</option>
-                        <option value="admin"<?php echo $add_role === 'admin' ? ' selected' : ''; ?>>Admin (Legacy)</option>
                     <?php endif; ?>
                 </select>
                 <?php if ($is_super_admin): ?>
