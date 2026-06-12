@@ -92,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $mysqli,
                             $management_recipient_ids,
                             'Booking cancelled for your lab',
-                            ($booking_target['lab_name'] ?? 'A booking') . ' on ' . ($booking_target['booking_date'] ?? 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was cancelled by the user. Reason: ' . $cancellation_reason,
+                            ($booking_target['lab_name'] ?? 'A booking') . ' on ' . (format_display_date($booking_target['booking_date'] ?? '') ?: 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was cancelled by the user. Reason: ' . $cancellation_reason,
                             'warning',
                             'booking-management.php',
                             true
@@ -544,7 +544,7 @@ $active = 'dashboard';
                             <?php foreach ($admin_chart as $entry): ?>
                                 <?php
                                 $height = (int) round(($entry['count'] / $max_count) * 100);
-                                $label = date('D', strtotime($entry['date']));
+                                $label = format_display_date($entry['date']);
                                 ?>
                                 <div class="chart-bar">
                                     <div class="chart-bar-fill" style="height: <?php echo $height; ?>%"></div>
@@ -606,11 +606,11 @@ $active = 'dashboard';
                                             <td><?php echo (int) $booking['booking_id']; ?></td>
                                             <td><?php echo htmlspecialchars($booking['lab_name']); ?></td>
                                             <td>
-                                                <?php echo htmlspecialchars($booking['booking_date']); ?>
+                                                <?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?>
                                                 <span class="muted-text">/ <?php echo htmlspecialchars($booking['time_slot']); ?></span>
                                             </td>
                                             <td>
-                                                <?php echo !empty($booking['created_at']) ? htmlspecialchars(date('Y-m-d H:i', strtotime($booking['created_at']))) : '-'; ?>
+                                                <?php echo !empty($booking['created_at']) ? htmlspecialchars(format_display_date($booking['created_at'])) : '-'; ?>
                                             </td>
                                             <td><span class="status <?php echo htmlspecialchars($booking['status']); ?>"><?php echo htmlspecialchars(get_booking_status_label($booking['status'] ?? '')); ?></span></td>
                                             <td><?php echo htmlspecialchars($note); ?></td>

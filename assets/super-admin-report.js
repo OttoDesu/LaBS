@@ -22,7 +22,10 @@
     var summaryCards = document.getElementById('report-summary-cards');
     var barChart = document.getElementById('report-bar-chart');
     var pieChart = document.getElementById('report-pie-chart');
+    var barTitle = document.getElementById('report-bar-title');
+    var pieTitle = document.getElementById('report-pie-title');
     var barMeta = document.getElementById('report-bar-meta');
+    var pieMeta = document.getElementById('report-pie-meta');
     var tableMeta = document.getElementById('report-table-meta');
     var tableWrapper = document.getElementById('report-table-wrapper');
     var tablePageSize = document.getElementById('report-page-size');
@@ -36,6 +39,7 @@
     var STATUS_KEYS = ['Approved', 'Cancelled', 'Rejected'];
     var tableRows = [];
     var tableCurrentPage = 1;
+    var currentPayload = null;
 
     function getThemeColors() {
         var styles = getComputedStyle(document.documentElement);
@@ -82,6 +86,187 @@
             minimumFractionDigits: 0,
             maximumFractionDigits: 2
         }).format(Number(value) || 0);
+    }
+
+    function getPayloadTotalBookings(payload) {
+        return Number(payload && payload.summary ? payload.summary.total_bookings : 0) || 0;
+    }
+
+    function setExportAvailability(targetId, isEnabled) {
+        document.querySelectorAll('.report-export[data-chart-target="' + targetId + '"]').forEach(function (button) {
+            button.disabled = !isEnabled;
+        });
+    }
+
+    function updateExportAvailability() {
+        setExportAvailability('report-bar-chart', !!(barChart && barChart.querySelector('canvas')));
+        setExportAvailability('report-pie-chart', !!(pieChart && pieChart.querySelector('canvas')));
+    }
+
+    function getChartCaptionHtml(payload, chartLabel) {
+        var filterLabel = payload && payload.filter_label ? payload.filter_label : 'Selected report';
+        var totalBookings = getPayloadTotalBookings(payload);
+        return [
+            '<div class="report-chart-caption">',
+            '<span>Total bookings: <strong>' + escapeHtml(formatNumber(totalBookings)) + '</strong></span>',
+            '</div>'
+        ].join('');
+    }
+
+    function getBucketLabel(payload) {
+        if (!payload || payload.filter_type === 'year') {
+            return 'months';
+        }
+        return 'dates';
+    }
+
+    function dataUrlToBytes(dataUrl) {
+        var base64 = String(dataUrl).split(',')[1] || '';
+        var binary = window.atob(base64);
+        var bytes = new Uint8Array(binary.length);
+        for (var i = 0; i < binary.length; i += 1) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    function asciiBytes(value) {
+        var text = String(value);
+        var bytes = new Uint8Array(text.length);
+        for (var i = 0; i < text.length; i += 1) {
+            bytes[i] = text.charCodeAt(i) & 255;
+        }
+        return bytes;
+    }
+
+    function createWhiteCanvasCopy(canvas) {
+        var copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        var context = copy.getContext('2d');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, copy.width, copy.height);
+        context.drawImage(canvas, 0, 0);
+        return copy;
+    }
+
+    function getExportSummaryLines(targetId) {
+        var payload = currentPayload || {};
+        var summary = payload.summary || {};
+        var chartName = targetId === 'report-pie-chart' ? 'Status distribution' : 'Booking distribution';
+        var filterLabel = payload.filter_label || 'Selected report';
+        return [
+            'LaBS Report Analytics',
+            chartName + ': ' + filterLabel,
+            'Total bookings: ' + formatNumber(summary.total_bookings || 0),
+            'Unique users: ' + formatNumber(summary.unique_users || 0) + ' | Total hours: ' + formatHours(summary.total_hours || 0) + ' | Average hours: ' + formatHours(summary.average_hours || 0)
+        ];
+    }
+
+    function createReportExportCanvas(canvas, targetId) {
+        var ratio = window.devicePixelRatio || 1;
+        var sourceWidth = Math.round(canvas.width / ratio);
+        var sourceHeight = Math.round(canvas.height / ratio);
+        var padding = 36;
+        var lineHeight = 24;
+        var lines = getExportSummaryLines(targetId);
+        var headerHeight = 28 + (lines.length * lineHeight) + 20;
+        var exportWidth = Math.max(sourceWidth + (padding * 2), 900);
+        var exportHeight = headerHeight + sourceHeight + (padding * 2);
+        var exportCanvas = document.createElement('canvas');
+        exportCanvas.width = exportWidth;
+        exportCanvas.height = exportHeight;
+        var context = exportCanvas.getContext('2d');
+
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, exportWidth, exportHeight);
+        context.fillStyle = '#1f2a37';
+        context.font = '700 22px Arial, sans-serif';
+        context.fillText(lines[0], padding, padding + 4);
+
+        context.font = '600 15px Arial, sans-serif';
+        context.fillStyle = '#1f2a37';
+        context.fillText(lines[1], padding, padding + 36);
+
+        context.font = '600 13px Arial, sans-serif';
+        context.fillStyle = '#64748b';
+        context.fillText(lines[2], padding, padding + 60);
+        context.fillText(lines[3], padding, padding + 84);
+
+        context.strokeStyle = '#dbe7ff';
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(padding, padding + 104);
+        context.lineTo(exportWidth - padding, padding + 104);
+        context.stroke();
+
+        var chartX = Math.round((exportWidth - sourceWidth) / 2);
+        var chartY = headerHeight + padding;
+        context.drawImage(canvas, chartX, chartY, sourceWidth, sourceHeight);
+        return exportCanvas;
+    }
+
+    function downloadCanvasPdf(canvas, filename) {
+        var exportCanvas = createWhiteCanvasCopy(canvas);
+        var imageBytes = dataUrlToBytes(exportCanvas.toDataURL('image/jpeg', 0.95));
+        var pageWidth = 842;
+        var pageHeight = 595;
+        var margin = 36;
+        var availableWidth = pageWidth - (margin * 2);
+        var availableHeight = pageHeight - (margin * 2);
+        var imageRatio = exportCanvas.width / exportCanvas.height;
+        var drawWidth = availableWidth;
+        var drawHeight = drawWidth / imageRatio;
+        if (drawHeight > availableHeight) {
+            drawHeight = availableHeight;
+            drawWidth = drawHeight * imageRatio;
+        }
+        var drawX = (pageWidth - drawWidth) / 2;
+        var drawY = (pageHeight - drawHeight) / 2;
+        var content = 'q\n' + drawWidth.toFixed(2) + ' 0 0 ' + drawHeight.toFixed(2) + ' ' + drawX.toFixed(2) + ' ' + drawY.toFixed(2) + ' cm\n/Im0 Do\nQ\n';
+
+        var objects = [
+            asciiBytes('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'),
+            asciiBytes('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'),
+            asciiBytes('3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pageWidth + ' ' + pageHeight + '] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n'),
+            [
+                asciiBytes('4 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + exportCanvas.width + ' /Height ' + exportCanvas.height + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + imageBytes.length + ' >>\nstream\n'),
+                imageBytes,
+                asciiBytes('\nendstream\nendobj\n')
+            ],
+            asciiBytes('5 0 obj\n<< /Length ' + content.length + ' >>\nstream\n' + content + 'endstream\nendobj\n')
+        ];
+
+        var chunks = [asciiBytes('%PDF-1.3\n')];
+        var offsets = [0];
+        var byteOffset = chunks[0].length;
+        objects.forEach(function (object) {
+            offsets.push(byteOffset);
+            if (Array.isArray(object)) {
+                object.forEach(function (part) {
+                    chunks.push(part);
+                    byteOffset += part.length;
+                });
+            } else {
+                chunks.push(object);
+                byteOffset += object.length;
+            }
+        });
+
+        var xrefOffset = byteOffset;
+        var xref = 'xref\n0 6\n0000000000 65535 f \n';
+        for (var i = 1; i < offsets.length; i += 1) {
+            xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+        }
+        xref += 'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + xrefOffset + '\n%%EOF';
+        chunks.push(asciiBytes(xref));
+
+        var blob = new Blob(chunks, { type: 'application/pdf' });
+        var link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(link.href);
     }
 
     function getNiceScaleMax(value) {
@@ -193,8 +378,8 @@
 
     function formatShortDate(date) {
         var day = String(date.getUTCDate()).padStart(2, '0');
-        var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        return day + ' ' + monthNames[date.getUTCMonth()];
+        var month = String(date.getUTCMonth() + 1).padStart(2, '0');
+        return day + '/' + month + '/' + date.getUTCFullYear();
     }
 
     function getIsoWeeksInYear(year) {
@@ -355,10 +540,10 @@
             });
         });
 
-        barChart.innerHTML = '<div class="report-canvas-wrap"></div>';
+        barChart.innerHTML = '<div class="report-chart-panel">' + getChartCaptionHtml(currentPayload, 'Booking distribution') + '<div class="report-canvas-wrap"></div></div>';
         barChart.querySelector('.report-canvas-wrap').appendChild(render.canvas);
         attachCanvasTooltip(render.canvas, regions);
-        barMeta.textContent = rows.length + ' bucket(s) | Peak: ' + formatNumber(maxValue);
+        barMeta.textContent = formatNumber(getPayloadTotalBookings(currentPayload)) + ' bookings across ' + formatNumber(rows.length) + ' ' + getBucketLabel(currentPayload) + '; highest ' + getBucketLabel(currentPayload).slice(0, -1) + ': ' + formatNumber(maxValue) + ' bookings';
     }
 
     function renderStackedBarChart(rows) {
@@ -419,16 +604,19 @@
             return '<span class="report-inline-legend-item"><i style="background:' + statusColor(statusKey) + '"></i>' + escapeHtml(getStatusDisplayLabel(statusKey)) + '</span>';
         }).join('');
 
-        barChart.innerHTML = '<div class="report-inline-legend">' + legend + '</div><div class="report-canvas-wrap"></div>';
+        barChart.innerHTML = '<div class="report-chart-panel">' + getChartCaptionHtml(currentPayload, 'Booking distribution') + '<div class="report-inline-legend">' + legend + '</div><div class="report-canvas-wrap"></div></div>';
         barChart.querySelector('.report-canvas-wrap').appendChild(render.canvas);
         attachCanvasTooltip(render.canvas, regions);
-        barMeta.textContent = rows.length + ' bucket(s) | Stacked by status';
+        barMeta.textContent = formatNumber(getPayloadTotalBookings(currentPayload)) + ' bookings across ' + formatNumber(rows.length) + ' ' + getBucketLabel(currentPayload) + '; stacked by status';
     }
 
     function renderPieChart(rows) {
         var total = rows.reduce(function (sum, row) { return sum + (Number(row.value) || 0); }, 0);
         if (!total) {
             pieChart.innerHTML = '<div class="empty-state">No status distribution available for the selected filter.</div>';
+            if (pieMeta) {
+                pieMeta.textContent = 'Total bookings: 0';
+            }
             return;
         }
 
@@ -487,16 +675,19 @@
             return '<div class="report-legend-item"><span class="report-legend-dot" style="background:' + statusColor(row.label) + '"></span><div><div class="report-legend-top"><strong>' + escapeHtml(row.label) + '</strong><b>' + escapeHtml(percent) + '%</b></div><span>' + escapeHtml(formatNumber(value)) + ' booking(s)</span></div></div>';
         }).join('');
 
-        pieChart.innerHTML = '<div class="report-pie-layout"><div class="report-canvas-wrap report-donut-wrap"></div><div class="report-legend">' + legend + '</div></div>';
+        pieChart.innerHTML = '<div class="report-chart-panel">' + getChartCaptionHtml(currentPayload, 'Status distribution') + '<div class="report-pie-layout"><div class="report-canvas-wrap report-donut-wrap"></div><div class="report-legend">' + legend + '</div></div></div>';
         pieChart.querySelector('.report-donut-wrap').appendChild(render.canvas);
         attachCanvasTooltip(render.canvas, regions);
+        if (pieMeta) {
+            pieMeta.textContent = 'Total bookings: ' + formatNumber(total);
+        }
     }
 
     function renderBarChart(payload) {
         var rows = payload.bar_mode === 'stacked' ? (payload.stacked_bar_chart || []) : (payload.bar_chart || []);
         if (!rows.length) {
             barChart.innerHTML = '<div class="empty-state">No bookings found for the selected filter.</div>';
-            barMeta.textContent = '0 records';
+            barMeta.textContent = 'Total bookings: 0';
             return;
         }
 
@@ -634,7 +825,14 @@
                 if (!result.ok || !result.payload.success) {
                     throw new Error(result.payload && result.payload.message ? result.payload.message : 'Unable to load report.');
                 }
+                currentPayload = result.payload;
                 description.textContent = result.payload.filter_label || 'Report loaded.';
+                if (barTitle) {
+                    barTitle.innerHTML = 'Booking distribution: <span class="report-title-filter">' + escapeHtml(result.payload.filter_label || 'Selected report') + '</span>';
+                }
+                if (pieTitle) {
+                    pieTitle.innerHTML = 'Status distribution: <span class="report-title-filter">' + escapeHtml(result.payload.filter_label || 'Selected report') + '</span>';
+                }
                 if (filterType.value === 'date' && Number(result.payload.selected_days) > 0) {
                     selectedDaysState.hidden = false;
                     selectedDaysState.textContent = 'Selected days: ' + formatNumber(result.payload.selected_days) + ' day' + (Number(result.payload.selected_days) === 1 ? '' : 's');
@@ -642,6 +840,7 @@
                 renderSummary(result.payload.summary || {});
                 renderBarChart(result.payload);
                 renderPieChart(result.payload.status_chart || []);
+                updateExportAvailability();
                 renderTable(result.payload.table || []);
             })
             .catch(function (error) {
@@ -662,23 +861,18 @@
             showError('No chart available to export yet.');
             return;
         }
-        var dataUrl = canvas.toDataURL('image/png');
+        var filterLabel = currentPayload && currentPayload.filter_label ? currentPayload.filter_label : 'report';
+        var safeLabel = filterLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'report';
+        var baseName = targetId + '-' + safeLabel;
+        var exportCanvas = createReportExportCanvas(canvas, targetId);
         if (format === 'png') {
             var link = document.createElement('a');
-            link.href = dataUrl;
-            link.download = targetId + '.png';
+            link.href = exportCanvas.toDataURL('image/png');
+            link.download = baseName + '.png';
             link.click();
             return;
         }
-        var pdfWindow = window.open('', '_blank');
-        if (!pdfWindow) {
-            showError('Popup blocked. Allow popups to export PDF.');
-            return;
-        }
-        pdfWindow.document.write('<html><head><title>Export PDF</title><style>body{margin:0;padding:24px;font-family:Arial,sans-serif;background:#fff}img{max-width:100%;height:auto;display:block;margin:0 auto}</style></head><body><img src="' + dataUrl + '" alt="Chart export"></body></html>');
-        pdfWindow.document.close();
-        pdfWindow.focus();
-        pdfWindow.print();
+        downloadCanvasPdf(exportCanvas, baseName + '.pdf');
     }
 
     filterType.addEventListener('change', updateFilterVisibility);

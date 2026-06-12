@@ -161,7 +161,7 @@ function build_booking_notification_message(
     }
     $lines[] = 'Lab: ' . $lab_name;
     if (trim($booking_date ?? '') !== '') {
-        $lines[] = 'Date: ' . trim((string) $booking_date);
+        $lines[] = 'Date: ' . format_display_date(trim((string) $booking_date));
     }
     if (!empty($selected_time_slots)) {
         $lines[] = 'Time: ' . implode(', ', $selected_time_slots);
@@ -235,7 +235,7 @@ if ($lab_id <= 0) {
 
 $lab = null;
 $stmt = $mysqli->prepare('
-    SELECT l.lab_id, l.lab_name, l.lab_description,
+    SELECT l.lab_id, l.lab_name, l.lab_description, l.lab_capacity,
            l.maintenance_status, l.maintenance_start_date, l.maintenance_end_date,
            c.cluster_id, c.cluster_name
     FROM labs l
@@ -1533,29 +1533,38 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                     <div class="card">
                         <div class="banner">
                             <div>
-                                <p class="badge">
-                                    <?php
-                                    if ($is_edit_group_booking) {
-                                        echo 'Edit Group Booking';
-                                    } elseif ($booking_mode === 'group') {
-                                        echo 'Group Booking Form';
-                                    } else {
-                                        echo 'Lab Reservation Form';
-                                    }
-                                    ?>
-                                </p>
+                                <p class="badge"><?php echo htmlspecialchars($lab['cluster_name']); ?></p>
                                 <h2><?php echo htmlspecialchars($lab['lab_name']); ?></h2>
-                                <?php if ($booking_mode !== 'group'): ?>
-                                    <p>
-                                        Booking date: <?php echo htmlspecialchars($booking_date ?: 'Not selected'); ?>
-                                        <span class="muted-text">Lead time: 3 days</span>
-                                    </p>
+                                <p><?php echo htmlspecialchars($lab['lab_description'] ?: 'Maklumat terperinci belum disediakan. Sila hubungi penyelaras makmal.'); ?></p>
+                                <?php if (($lab['maintenance_status'] ?? 'available') === 'maintenance'): ?>
+                                    <p class="muted-text">Maintenance window: <?php echo htmlspecialchars(get_lab_maintenance_period_label($lab['maintenance_start_date'] ?? null, $lab['maintenance_end_date'] ?? null)); ?></p>
                                 <?php endif; ?>
                             </div>
                             <div class="banner-links">
+                                <span class="badge">Capacity: <?php echo htmlspecialchars((string) ($lab['lab_capacity'] ?? '-')); ?> seats</span>
                                 <a class="btn ghost" href="availability.php?lab_id=<?php echo (int) $lab_id; ?>">Back to Lab</a>
                             </div>
                         </div>
+                        <?php if ($is_lab_supervisor): ?>
+                            <div class="asset-management-tabs booking-mode-tabs" role="tablist" aria-label="Booking mode">
+                                <a
+                                    class="asset-management-tab booking-mode-tab <?php echo $booking_mode !== 'group' ? 'is-active' : ''; ?>"
+                                    href="availability.php?lab_id=<?php echo (int) $lab_id; ?>&booking_mode=slot"
+                                    role="tab"
+                                    aria-selected="<?php echo $booking_mode !== 'group' ? 'true' : 'false'; ?>"
+                                >
+                                    Book Slot Lab
+                                </a>
+                                <a
+                                    class="asset-management-tab booking-mode-tab <?php echo $booking_mode === 'group' ? 'is-active' : ''; ?>"
+                                    href="reservation-form.php?lab_id=<?php echo (int) $lab_id; ?>&booking_date=<?php echo urlencode($booking_date ?: date('Y-m-d')); ?>&booking_mode=group"
+                                    role="tab"
+                                    aria-selected="<?php echo $booking_mode === 'group' ? 'true' : 'false'; ?>"
+                                >
+                                    Group Booking
+                                </a>
+                            </div>
+                        <?php endif; ?>
                     </div>
 
                     <form class="card reservation-form" method="POST" enctype="multipart/form-data">
@@ -1850,7 +1859,7 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                             <div class="form-row">
                                 <div>
                                     <label>Date</label>
-                                    <input type="text" value="<?php echo htmlspecialchars($booking_date ?: 'Not selected'); ?>" readonly>
+                                    <input type="text" value="<?php echo htmlspecialchars(format_display_date($booking_date) ?: 'Not selected'); ?>" readonly>
                                 </div>
                                 <div>
                                     <label>Reference slot *</label>
@@ -1915,7 +1924,7 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                             <div class="form-row">
                                 <div>
                                     <label>Week 1 start date *</label>
-                                    <input type="text" value="<?php echo htmlspecialchars((string) ($form_values['group_week_one_start_date'] ?: 'Not selected')); ?>" readonly>
+                                    <input type="text" value="<?php echo htmlspecialchars(format_display_date((string) $form_values['group_week_one_start_date']) ?: 'Not selected'); ?>" readonly>
                                 </div>
                                 <div>
                                     <label>Weeks *</label>

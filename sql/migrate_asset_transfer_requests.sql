@@ -1,0 +1,40 @@
+CREATE TABLE IF NOT EXISTS asset_transfer_requests (
+    request_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    asset_id BIGINT(20) UNSIGNED NOT NULL,
+    source_lab_id BIGINT(20) UNSIGNED NOT NULL,
+    destination_lab_id BIGINT(20) UNSIGNED NOT NULL,
+    quantity INT NOT NULL,
+    reason TEXT NOT NULL,
+    requested_by BIGINT(20) UNSIGNED NOT NULL,
+    requested_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+    approved_by BIGINT(20) UNSIGNED DEFAULT NULL,
+    approved_at TIMESTAMP NULL DEFAULT NULL,
+    rejection_reason TEXT DEFAULT NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    KEY idx_asset_transfer_status (status, requested_at),
+    KEY idx_asset_transfer_asset (asset_id),
+    KEY idx_asset_transfer_source (source_lab_id),
+    KEY idx_asset_transfer_destination (destination_lab_id),
+    KEY idx_asset_transfer_requested_by (requested_by),
+    KEY idx_asset_transfer_approved_by (approved_by),
+    CONSTRAINT fk_asset_transfer_asset FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
+    CONSTRAINT fk_asset_transfer_source_lab FOREIGN KEY (source_lab_id) REFERENCES labs(lab_id),
+    CONSTRAINT fk_asset_transfer_destination_lab FOREIGN KEY (destination_lab_id) REFERENCES labs(lab_id),
+    CONSTRAINT fk_asset_transfer_requested_by FOREIGN KEY (requested_by) REFERENCES users(id),
+    CONSTRAINT fk_asset_transfer_approved_by FOREIGN KEY (approved_by) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS asset_transfer_requests_log (
+    log_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    request_id BIGINT(20) UNSIGNED NOT NULL,
+    event ENUM('requested','approved','rejected','transferred') NOT NULL,
+    actor_id BIGINT(20) UNSIGNED NOT NULL,
+    notes TEXT DEFAULT NULL,
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_asset_transfer_log_request (request_id, created_at),
+    KEY idx_asset_transfer_log_actor (actor_id),
+    CONSTRAINT fk_asset_transfer_log_request FOREIGN KEY (request_id) REFERENCES asset_transfer_requests(request_id) ON DELETE CASCADE,
+    CONSTRAINT fk_asset_transfer_log_actor FOREIGN KEY (actor_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

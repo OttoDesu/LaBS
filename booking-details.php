@@ -229,7 +229,7 @@ $active = 'booking-management';
                     <div>
                         <p class="badge">Booking #<?php echo (int) $booking['booking_id']; ?></p>
                         <h2><?php echo htmlspecialchars($booking['lab_name']); ?></h2>
-                        <p><?php echo htmlspecialchars($booking['booking_date']); ?> | <?php echo htmlspecialchars($booking['start_time'] ?? '-') . ' - ' . htmlspecialchars($booking['end_time'] ?? '-'); ?></p>
+                        <p><?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?> | <?php echo htmlspecialchars($booking['start_time'] ?? '-') . ' - ' . htmlspecialchars($booking['end_time'] ?? '-'); ?></p>
                     </div>
                     <div class="banner-links">
                         <a class="btn ghost" href="booking-management.php">Back to Booking Management</a>

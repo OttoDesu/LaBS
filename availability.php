@@ -404,13 +404,35 @@ if ($next_month > 12) {
                             <a class="btn ghost" href="labs.php?cluster_id=<?php echo (int) $lab['cluster_id']; ?>">Choose another lab</a>
                         </div>
                     </div>
+                    <?php if ($is_lab_supervisor): ?>
+                        <div class="asset-management-tabs booking-mode-tabs" id="booking-mode-switch" role="tablist" aria-label="Booking mode">
+                            <button
+                                class="asset-management-tab booking-mode-tab <?php echo $booking_mode !== 'group' ? 'is-active' : ''; ?>"
+                                type="button"
+                                data-mode="slot"
+                                role="tab"
+                                aria-selected="<?php echo $booking_mode !== 'group' ? 'true' : 'false'; ?>"
+                            >
+                                Book Slot Lab
+                            </button>
+                            <button
+                                class="asset-management-tab booking-mode-tab <?php echo $booking_mode === 'group' ? 'is-active' : ''; ?>"
+                                type="button"
+                                data-mode="group"
+                                role="tab"
+                                aria-selected="<?php echo $booking_mode === 'group' ? 'true' : 'false'; ?>"
+                            >
+                                Group Booking
+                            </button>
+                        </div>
+                    <?php endif; ?>
                     <?php if ($active_hold_resume): ?>
                         <a
                             class="alert alert-info hold-resume-link"
                             href="<?php echo htmlspecialchars($active_hold_resume['link_url']); ?>"
                             data-hold-expires-at-unix="<?php echo (int) $active_hold_resume_expires_at_unix; ?>"
                         >
-                            You have an unfinished booking form for this lab on <?php echo htmlspecialchars((string) ($active_hold_resume['booking_date'] ?? 'selected date')); ?>
+                            You have an unfinished booking form for this lab on <?php echo htmlspecialchars(format_display_date((string) ($active_hold_resume['booking_date'] ?? '')) ?: 'selected date'); ?>
                             <?php if (!empty($active_hold_resume['time_slots'])): ?>
                                 (<?php echo htmlspecialchars(implode(', ', $active_hold_resume['time_slots'])); ?>)
                             <?php endif; ?>
@@ -492,24 +514,6 @@ if ($next_month > 12) {
                                 <a class="icon-button" href="availability.php?lab_id=<?php echo (int) $lab_id; ?>&month=<?php echo $next_month; ?>&year=<?php echo $next_year; ?>">›</a>
                             </div>
                         </div>
-                        <?php if ($is_lab_supervisor): ?>
-                            <div class="card booking-mode-card">
-                                <div class="section-header">
-                                    <div>
-                                        <h3>Booking Mode</h3>
-                                    </div>
-                                </div>
-                                <div class="toggle-group purpose-toggle-group" id="booking-mode-switch">
-                                    <button class="toggle-option <?php echo $booking_mode !== 'group' ? 'active' : ''; ?>" type="button" data-mode="slot">
-                                        <span>Book Slot Lab</span>
-                                    </button>
-                                    <button class="toggle-option <?php echo $booking_mode === 'group' ? 'active' : ''; ?>" type="button" data-mode="group">
-                                        <span>Group Booking</span>
-                                    </button>
-                                </div>
-                            </div>
-                        <?php endif; ?>
-
                         <div class="calendar-grid" id="calendar-grid"></div>
 
                         <div class="slot-section">

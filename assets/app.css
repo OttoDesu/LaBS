@@ -1179,6 +1179,11 @@ th {
     color: var(--danger);
 }
 
+.status-log {
+    margin-top: 5px;
+    line-height: 1.35;
+}
+
 .action-buttons {
     display: flex;
     gap: 8px;
@@ -1392,13 +1397,146 @@ th {
     align-items: center;
 }
 
-.filters-block input {
+.filters-block input,
+.filters-block select,
+.filters-block textarea {
     min-width: 0;
     width: 100%;
 }
 
+.filters-block textarea {
+    resize: vertical;
+}
+
 .filters-block .btn {
     justify-self: start;
+}
+
+.asset-management-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-top: 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    overflow-x: auto;
+}
+
+.asset-management-tab {
+    display: inline-flex;
+    align-items: center;
+    min-height: 54px;
+    padding: 0 24px;
+    border-bottom: 3px solid transparent;
+    color: var(--muted);
+    font-weight: 700;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.asset-management-tab:hover,
+.asset-management-tab:focus-visible {
+    color: var(--text);
+}
+
+.asset-management-tab.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+
+.booking-mode-tabs {
+    margin-top: 18px;
+}
+
+.booking-mode-label {
+    margin-top: 18px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.booking-mode-tab {
+    background: transparent;
+    border-top: 0;
+    border-right: 0;
+    border-left: 0;
+    cursor: pointer;
+    font: inherit;
+    text-align: center;
+    appearance: none;
+}
+
+.asset-transfer-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 20px;
+    margin-top: 18px;
+    padding-top: 4px;
+}
+
+.asset-transfer-form .form-field {
+    display: grid;
+    gap: 8px;
+}
+
+.asset-transfer-form label {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.asset-transfer-form input,
+.asset-transfer-form select,
+.asset-transfer-form textarea {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--text);
+    font: inherit;
+    padding: 11px 12px;
+    outline: none;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.asset-transfer-form select {
+    min-height: 44px;
+}
+
+.asset-transfer-form textarea {
+    resize: vertical;
+    min-height: 112px;
+    line-height: 1.45;
+}
+
+.asset-transfer-form input:focus,
+.asset-transfer-form select:focus,
+.asset-transfer-form textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.asset-transfer-reason {
+    grid-column: 1 / -1;
+}
+
+.field-hint {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.asset-transfer-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 2px;
+}
+
+.asset-transfer-actions .btn {
+    min-width: 150px;
 }
 
 .badge {
@@ -2323,6 +2461,49 @@ th {
     justify-content: center;
 }
 
+.report-chart-panel {
+    width: 100%;
+    display: grid;
+    gap: 14px;
+}
+
+.report-chart-caption {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #f8fafc;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.report-chart-caption strong {
+    color: var(--text);
+}
+
+.report-chart-summary {
+    display: grid;
+    justify-items: end;
+    gap: 2px;
+    text-align: right;
+}
+
+.report-chart-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+}
+
+.report-title-filter {
+    color: var(--accent);
+    font-weight: 600;
+}
+
 .report-canvas-wrap {
     width: 100%;
     overflow-x: auto;
@@ -3081,6 +3262,18 @@ input[readonly] {
 }
 
 @media (max-width: 640px) {
+    .asset-transfer-form {
+        grid-template-columns: 1fr;
+    }
+
+    .asset-transfer-actions {
+        justify-content: stretch;
+    }
+
+    .asset-transfer-actions .btn {
+        width: 100%;
+    }
+
     .topbar {
         flex-direction: row;
         gap: 10px;

@@ -88,7 +88,7 @@ function format_datetime($value) {
     if (!$value) {
         return '-';
     }
-    return date('Y-m-d H:i', strtotime($value));
+    return format_display_date($value);
 }
 
 $calendar_payload = build_booking_calendar_payload($booking);
@@ -268,7 +268,7 @@ $google_calendar_url = $calendar_payload ? build_google_calendar_url($calendar_p
                 <h3>Booking</h3>
                 <div class="field"><span>Lab</span><?php echo htmlspecialchars($booking['lab_name']); ?></div>
                 <div class="field"><span>Cluster</span><?php echo htmlspecialchars($booking['cluster_name']); ?></div>
-                <div class="field"><span>Lab Date</span><?php echo htmlspecialchars($booking['booking_date']); ?></div>
+                <div class="field"><span>Lab Date</span><?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?></div>
                 <div class="field"><span>Time Slot</span><?php echo htmlspecialchars($booking['time_slot']); ?></div>
                 <div class="field"><span>Status</span><span class="status <?php echo htmlspecialchars($booking['status']); ?>"><?php echo htmlspecialchars(get_booking_status_label($booking['status'] ?? '')); ?></span></div>
             </div>

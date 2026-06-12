@@ -123,7 +123,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $mysqli,
                             (int) $booking_target['user_id'],
                             'Booking rejected',
-                            ($booking_target['lab_name'] ?? 'Your booking') . ' on ' . ($booking_target['booking_date'] ?? 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was rejected. Reason: ' . $rejection_reason,
+                            ($booking_target['lab_name'] ?? 'Your booking') . ' on ' . (format_display_date($booking_target['booking_date'] ?? '') ?: 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was rejected. Reason: ' . $rejection_reason,
                             'danger',
                             'dashboard.php',
                             true
@@ -149,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $mysqli,
                                 $management_recipient_ids,
                                 'Booking rejected in your cluster',
-                                ($booking_target['lab_name'] ?? 'A booking') . ' on ' . ($booking_target['booking_date'] ?? 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was rejected. Reason: ' . $rejection_reason,
+                                ($booking_target['lab_name'] ?? 'A booking') . ' on ' . (format_display_date($booking_target['booking_date'] ?? '') ?: 'selected date') . ' (' . ($booking_target['time_slot'] ?? '-') . ') was rejected. Reason: ' . $rejection_reason,
                                 'warning',
                                 'booking-management.php',
                                 true
@@ -178,7 +178,7 @@ if ($status_filter === 'all') {
     if ($is_super_admin) {
         if ($cluster_filter > 0) {
             $stmt = $mysqli->prepare('
-                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
                        l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
@@ -191,7 +191,7 @@ if ($status_filter === 'all') {
             $stmt->bind_param('ssssi', $search_like, $search_like, $search_like, $search_like, $cluster_filter);
         } else {
             $stmt = $mysqli->prepare('
-                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
                        l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
@@ -207,7 +207,7 @@ if ($status_filter === 'all') {
             $placeholders = implode(',', array_fill(0, count($lab_scope_ids), '?'));
             $types = str_repeat('i', count($lab_scope_ids));
             $stmt = $mysqli->prepare('
-                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
                        l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
@@ -223,8 +223,8 @@ if ($status_filter === 'all') {
         }
     } else {
         $stmt = $mysqli->prepare('
-            SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
-                   l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+            SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
             FROM lab_bookings lb
             JOIN labs l ON lb.lab_id = l.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -239,7 +239,7 @@ if ($status_filter === 'all') {
     if ($is_super_admin) {
         if ($cluster_filter > 0) {
             $stmt = $mysqli->prepare('
-                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
                        l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
@@ -253,7 +253,7 @@ if ($status_filter === 'all') {
             $stmt->bind_param('sssssi', $search_like, $search_like, $search_like, $search_like, $status_filter, $cluster_filter);
         } else {
             $stmt = $mysqli->prepare('
-                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
                        l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
@@ -270,7 +270,7 @@ if ($status_filter === 'all') {
             $placeholders = implode(',', array_fill(0, count($lab_scope_ids), '?'));
             $types = str_repeat('i', count($lab_scope_ids));
             $stmt = $mysqli->prepare('
-                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
+                SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
                        l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
@@ -287,8 +287,8 @@ if ($status_filter === 'all') {
         }
     } else {
         $stmt = $mysqli->prepare('
-            SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
-                   l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+            SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
             FROM lab_bookings lb
             JOIN labs l ON lb.lab_id = l.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -476,6 +476,15 @@ $active = 'booking-management';
                                     } elseif ($booking['status'] === 'Cancelled' && $booking['cancellation_reason']) {
                                         $note = $booking['cancellation_reason'];
                                     }
+                                    $status_event_label = 'Submitted';
+                                    $status_event_time = $booking['created_at'] ?? '';
+                                    if ($booking['status'] === 'Rejected') {
+                                        $status_event_label = 'Rejected';
+                                        $status_event_time = $booking['updated_at'] ?? $status_event_time;
+                                    } elseif ($booking['status'] === 'Cancelled') {
+                                        $status_event_label = 'Cancelled';
+                                        $status_event_time = $booking['updated_at'] ?? $status_event_time;
+                                    }
                                     ?>
                                     <tr>
                                         <td data-label="#"><?php echo (int) ((($booking_pagination['current_page'] - 1) * $booking_pagination['per_page']) + $index + 1); ?></td>
@@ -488,9 +497,19 @@ $active = 'booking-management';
                                         <?php if ($is_super_admin): ?>
                                             <td data-label="Cluster"><?php echo htmlspecialchars($booking['cluster_name'] ?? '-'); ?></td>
                                         <?php endif; ?>
-                                        <td data-label="Date"><?php echo htmlspecialchars($booking['booking_date']); ?></td>
+                                        <td data-label="Date"><?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?></td>
                                         <td data-label="Time Slot"><?php echo htmlspecialchars($booking['time_slot']); ?></td>
-                                        <td data-label="Status"><span class="status <?php echo htmlspecialchars($booking['status']); ?>"><?php echo htmlspecialchars(get_booking_status_label($booking['status'] ?? '')); ?></span></td>
+                                        <td data-label="Status">
+                                            <span class="status <?php echo htmlspecialchars($booking['status']); ?>"><?php echo htmlspecialchars(get_booking_status_label($booking['status'] ?? '')); ?></span>
+                                            <div class="muted-text status-log">
+                                                Submitted: <?php echo htmlspecialchars(format_display_date($booking['created_at'] ?? '')); ?>
+                                            </div>
+                                            <?php if ($booking['status'] !== 'Approved'): ?>
+                                                <div class="muted-text status-log">
+                                                    <?php echo htmlspecialchars($status_event_label); ?>: <?php echo htmlspecialchars(format_display_date($status_event_time)); ?>
+                                                </div>
+                                            <?php endif; ?>
+                                        </td>
                                         <td data-label="Notes"><?php echo htmlspecialchars($note); ?></td>
                                         <td data-label="Action">
                                             <div class="action-buttons">

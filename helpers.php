@@ -87,6 +87,60 @@ function get_lab_supervisor_lab_ids($mysqli, $user_id) {
     return $lab_ids;
 }
 
+function ensure_asset_transfer_tables($mysqli) {
+    static $ensured = false;
+    if ($ensured || !$mysqli) {
+        return;
+    }
+
+    $mysqli->query("
+        CREATE TABLE IF NOT EXISTS asset_transfer_requests (
+            request_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            asset_id BIGINT(20) UNSIGNED NOT NULL,
+            source_lab_id BIGINT(20) UNSIGNED NOT NULL,
+            destination_lab_id BIGINT(20) UNSIGNED NOT NULL,
+            quantity INT NOT NULL,
+            reason TEXT NOT NULL,
+            requested_by BIGINT(20) UNSIGNED NOT NULL,
+            requested_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+            status ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+            approved_by BIGINT(20) UNSIGNED DEFAULT NULL,
+            approved_at TIMESTAMP NULL DEFAULT NULL,
+            rejection_reason TEXT DEFAULT NULL,
+            created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            KEY idx_asset_transfer_status (status, requested_at),
+            KEY idx_asset_transfer_asset (asset_id),
+            KEY idx_asset_transfer_source (source_lab_id),
+            KEY idx_asset_transfer_destination (destination_lab_id),
+            KEY idx_asset_transfer_requested_by (requested_by),
+            KEY idx_asset_transfer_approved_by (approved_by),
+            CONSTRAINT fk_asset_transfer_asset FOREIGN KEY (asset_id) REFERENCES assets(asset_id),
+            CONSTRAINT fk_asset_transfer_source_lab FOREIGN KEY (source_lab_id) REFERENCES labs(lab_id),
+            CONSTRAINT fk_asset_transfer_destination_lab FOREIGN KEY (destination_lab_id) REFERENCES labs(lab_id),
+            CONSTRAINT fk_asset_transfer_requested_by FOREIGN KEY (requested_by) REFERENCES users(id),
+            CONSTRAINT fk_asset_transfer_approved_by FOREIGN KEY (approved_by) REFERENCES users(id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ");
+
+    $mysqli->query("
+        CREATE TABLE IF NOT EXISTS asset_transfer_requests_log (
+            log_id BIGINT(20) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            request_id BIGINT(20) UNSIGNED NOT NULL,
+            event ENUM('requested','approved','rejected','transferred') NOT NULL,
+            actor_id BIGINT(20) UNSIGNED NOT NULL,
+            notes TEXT DEFAULT NULL,
+            created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+            KEY idx_asset_transfer_log_request (request_id, created_at),
+            KEY idx_asset_transfer_log_actor (actor_id),
+            CONSTRAINT fk_asset_transfer_log_request FOREIGN KEY (request_id) REFERENCES asset_transfer_requests(request_id) ON DELETE CASCADE,
+            CONSTRAINT fk_asset_transfer_log_actor FOREIGN KEY (actor_id) REFERENCES users(id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ");
+
+    $ensured = true;
+}
+
 function require_admin() {
     $user_type = $_SESSION['user_type'] ?? 'public';
     if (!is_admin_user($user_type)) {
@@ -154,6 +208,25 @@ function get_booking_pk_column($mysqli) {
 
 function get_booking_status_label($status) {
     return $status === 'Approved' ? 'Booked' : $status;
+}
+
+function format_display_date($date): string {
+    $date = trim((string) $date);
+    if ($date === '') {
+        return '';
+    }
+
+    $parsed = DateTimeImmutable::createFromFormat('Y-m-d', $date);
+    if ($parsed && $parsed->format('Y-m-d') === $date) {
+        return $parsed->format('d/m/Y');
+    }
+
+    $parsed = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $date);
+    if ($parsed) {
+        return $parsed->format('d/m/Y H:i');
+    }
+
+    return $date;
 }
 
 function ensure_lab_maintenance_columns($mysqli) {
@@ -596,7 +669,7 @@ function create_booking_hold_resume_notification($mysqli, int $user_id, int $lab
         'time_slots' => implode(',', $time_slots),
         'booking_hold_token' => $hold_token
     ]);
-    $message = 'Your booking form for ' . $lab_name . ' on ' . $booking_date
+    $message = 'Your booking form for ' . $lab_name . ' on ' . format_display_date($booking_date)
         . ' (' . implode(', ', $time_slots) . ') is on hold. Open this notification to continue the form before the timer ends.';
 
     $existing_stmt = $mysqli->prepare('
@@ -800,7 +873,7 @@ function create_due_booking_hold_reminders($mysqli, int $user_id): int {
             'time_slots' => $time_slots,
             'booking_hold_token' => $hold_token
         ]);
-        $message = 'Your held booking for ' . ($hold['lab_name'] ?? 'selected lab') . ' on ' . $booking_date
+        $message = 'Your held booking for ' . ($hold['lab_name'] ?? 'selected lab') . ' on ' . format_display_date($booking_date)
             . ' (' . $time_slots . ') expires in less than 5 minutes. Continue the form to finish the booking.';
 
         if (create_user_notification($mysqli, $user_id, 'Finish your booking', $message, 'warning', $link_url)) {
@@ -1678,10 +1751,10 @@ function get_lab_maintenance_period_label($start_date, $end_date) {
     }
 
     if ($start_date && $end_date) {
-        return $start_date . ' to ' . $end_date;
+        return format_display_date($start_date) . ' to ' . format_display_date($end_date);
     }
 
-    return $start_date ?: $end_date;
+    return format_display_date($start_date ?: $end_date);
 }
 
 function get_lab_maintenance_day_count($start_date, $end_date) {

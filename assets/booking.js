@@ -105,6 +105,15 @@
             .replace(/'/g, '&#039;');
     }
 
+    function formatDateKey(dateKey) {
+        var value = String(dateKey || '');
+        var match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!match) {
+            return value;
+        }
+        return match[3] + '/' + match[2] + '/' + match[1];
+    }
+
     function highlightText(text, term) {
         var safeText = escapeHtml(text);
         if (!term) {
@@ -241,7 +250,7 @@
             if (lab.maintenance_status === 'maintenance') {
                 var maintenanceLabel = '';
                 if (lab.maintenance_start_date && lab.maintenance_end_date) {
-                    maintenanceLabel = lab.maintenance_start_date + ' to ' + lab.maintenance_end_date;
+                    maintenanceLabel = formatDateKey(lab.maintenance_start_date) + ' to ' + formatDateKey(lab.maintenance_end_date);
                 } else {
                     maintenanceLabel = 'Schedule pending';
                 }
@@ -379,12 +388,7 @@
         }
 
         function formatDate(date) {
-            return date.toLocaleDateString('en-GB', {
-                weekday: 'long',
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric'
-            });
+            return formatDateKey(formatKey(date));
         }
 
         function updateSelectedDisplay() {
@@ -667,12 +671,7 @@
                     syncSelectedDisplay();
                     syncBookingButton();
                     if (slotTitle) {
-                        slotTitle.textContent = 'Booked slots on ' + new Date(selectedKey).toLocaleDateString('en-GB', {
-                            weekday: 'long',
-                            day: 'numeric',
-                            month: 'long',
-                            year: 'numeric'
-                        });
+                        slotTitle.textContent = 'Booked slots on ' + formatDateKey(selectedKey);
                     }
                     if (bookingHint) {
                         bookingHint.textContent = 'Past dates are view-only. You can review booked slots but cannot make a reservation.';

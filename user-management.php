@@ -15,6 +15,12 @@ $session_user_id = (int) ($_SESSION['user_id'] ?? 0);
 $search = trim($_GET['search'] ?? '');
 $role_filter = $_GET['role'] ?? 'all';
 $cluster_filter = (int) ($_GET['cluster'] ?? 0);
+$page = max(1, (int) ($_GET['page'] ?? 1));
+$per_page_options = [10, 25, 50, 100];
+$per_page = (int) ($_GET['per_page'] ?? 10);
+if (!in_array($per_page, $per_page_options, true)) {
+    $per_page = 10;
+}
 $errors = [];
 $flash_info = get_flash('info');
 $show_add_modal = false;
@@ -396,6 +402,18 @@ while ($row = $result->fetch_assoc()) {
     $stmt->close();
 }
 
+$total_users = count($users);
+$total_pages = max(1, (int) ceil($total_users / $per_page));
+$page = min($page, $total_pages);
+$page_offset = ($page - 1) * $per_page;
+$users = array_slice($users, $page_offset, $per_page);
+$pagination_query = [
+    'search' => $search,
+    'role' => $role_filter,
+    'cluster' => $cluster_filter,
+    'per_page' => $per_page
+];
+
 $lab_scope_map = [];
 if ($is_super_admin && $users) {
     $user_ids = array_map(static function ($user) {
@@ -461,7 +479,7 @@ if (isset($directory_stmt) && $directory_stmt) {
 function role_label($user_type) {
     switch ($user_type) {
         case 'super_admin':
-            return 'Super Admin';
+            return 'Admin';
         case 'cluster_admin':
             return 'Cluster Admin';
         case 'lab_supervisor':
@@ -614,15 +632,25 @@ $active = 'user-management';
                                 <option value="lab_supervisor"<?php echo $role_filter === 'lab_supervisor' ? ' selected' : ''; ?>>Lab Supervisor</option>
                             <?php endif; ?>
                             <?php if ($is_super_admin): ?>
-                                <option value="super_admin"<?php echo $role_filter === 'super_admin' ? ' selected' : ''; ?>>Super Admin</option>
+                                <option value="super_admin"<?php echo $role_filter === 'super_admin' ? ' selected' : ''; ?>>Admin</option>
                                 <option value="admin"<?php echo $role_filter === 'admin' ? ' selected' : ''; ?>>Admin (Legacy)</option>
                             <?php endif; ?>
+                        </select>
+                        <select name="per_page" aria-label="Users per page">
+                            <?php foreach ($per_page_options as $per_page_option): ?>
+                                <option value="<?php echo (int) $per_page_option; ?>"<?php echo $per_page === $per_page_option ? ' selected' : ''; ?>>
+                                    <?php echo (int) $per_page_option; ?> per page
+                                </option>
+                            <?php endforeach; ?>
                         </select>
                         <button class="btn primary" type="submit">Filter</button>
                     </form>
                 </div>
 
                 <div class="card">
+                    <div class="table-meta">
+                        Showing <?php echo $total_users > 0 ? (int) ($page_offset + 1) : 0; ?>-<?php echo (int) min($page_offset + $per_page, $total_users); ?> of <?php echo (int) $total_users; ?> users
+                    </div>
                     <div class="table-wrapper">
                         <table>
                             <thead>
@@ -641,7 +669,7 @@ $active = 'user-management';
                             <tbody>
                                 <?php foreach ($users as $index => $user): ?>
                                     <tr>
-                                        <td><?php echo (int) ($index + 1); ?></td>
+                                        <td><?php echo (int) ($page_offset + $index + 1); ?></td>
                                         <td><?php echo htmlspecialchars($user['name']); ?></td>
                                         <td><?php echo htmlspecialchars(role_label($user['user_type'])); ?></td>
                                         <td><?php echo htmlspecialchars($user['cluster_name'] ?? '-'); ?></td>
@@ -679,6 +707,21 @@ $active = 'user-management';
                             </tbody>
                         </table>
                     </div>
+                    <?php if ($total_pages > 1): ?>
+                        <div class="pagination">
+                            <?php
+                            $prev_page = max(1, $page - 1);
+                            $next_page = min($total_pages, $page + 1);
+                            $pagination_query['page'] = $prev_page;
+                            $prev_url = 'user-management.php?' . http_build_query($pagination_query);
+                            $pagination_query['page'] = $next_page;
+                            $next_url = 'user-management.php?' . http_build_query($pagination_query);
+                            ?>
+                            <a class="btn ghost small<?php echo $page <= 1 ? ' is-disabled' : ''; ?>" href="<?php echo htmlspecialchars($prev_url); ?>">Previous</a>
+                            <div class="pagination-status">Page <?php echo (int) $page; ?> of <?php echo (int) $total_pages; ?></div>
+                            <a class="btn ghost small<?php echo $page >= $total_pages ? ' is-disabled' : ''; ?>" href="<?php echo htmlspecialchars($next_url); ?>">Next</a>
+                        </div>
+                    <?php endif; ?>
                 </div>
 
                 <?php if ($is_lab_supervisor): ?>
@@ -690,7 +733,7 @@ $active = 'user-management';
                             </div>
                         </div>
                         <div class="user-directory-sections">
-                            <?php foreach (['super_admin' => 'Super Admin', 'cluster_admin' => 'Cluster Admin', 'lab_supervisor' => 'Lab Supervisor', 'public' => 'Public User'] as $role_key => $role_title): ?>
+                            <?php foreach (['super_admin' => 'Admin', 'cluster_admin' => 'Cluster Admin', 'lab_supervisor' => 'Lab Supervisor', 'public' => 'Public User'] as $role_key => $role_title): ?>
                                 <div class="user-directory-section">
                                     <div class="directory-section-head">
                                         <h3><?php echo htmlspecialchars($role_title); ?></h3>

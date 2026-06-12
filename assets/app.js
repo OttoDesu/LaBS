@@ -88,13 +88,12 @@
             if (Number.isNaN(parsed.getTime())) {
                 return value;
             }
-            return parsed.toLocaleString('en-GB', {
-                day: '2-digit',
-                month: 'short',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
+            var day = String(parsed.getDate()).padStart(2, '0');
+            var month = String(parsed.getMonth() + 1).padStart(2, '0');
+            var year = parsed.getFullYear();
+            var hour = String(parsed.getHours()).padStart(2, '0');
+            var minute = String(parsed.getMinutes()).padStart(2, '0');
+            return day + '/' + month + '/' + year + ' ' + hour + ':' + minute;
         }
 
         function setNotificationCount(count) {

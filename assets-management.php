@@ -733,6 +733,10 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                         <button class="btn primary" type="submit">Filter</button>
                     </form>
                     <?php endif; ?>
+                    <div class="asset-management-tabs" role="tablist" aria-label="Asset management sections">
+                        <a class="asset-management-tab is-active" href="assets-management.php" aria-current="page">Asset Records</a>
+                        <a class="asset-management-tab" href="asset-transfer-requests.php">Transfer Requests</a>
+                    </div>
                 </div>
 
                 <?php if ($is_super_admin): ?>

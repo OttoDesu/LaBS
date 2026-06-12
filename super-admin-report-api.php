@@ -100,6 +100,11 @@ function get_month_name(int $month): string {
     return $months[$month] ?? 'Unknown';
 }
 
+function format_report_date_label(string $date): string {
+    $parsed = DateTimeImmutable::createFromFormat('Y-m-d', $date);
+    return $parsed ? $parsed->format('d/m/Y') : $date;
+}
+
 function get_iso_week_range(int $year, int $week): array {
     $start = new DateTime();
     $start->setISODate($year, $week);
@@ -114,8 +119,8 @@ function get_iso_week_range(int $year, int $week): array {
         'label' => sprintf(
             'Week %02d (%s - %s)',
             $week,
-            $start->format('d M Y'),
-            $end->format('d M Y')
+            $start->format('d/m/Y'),
+            $end->format('d/m/Y')
         )
     ];
 }
@@ -263,8 +268,8 @@ function get_filter_label(array $filters, string $cluster_name = '', string $lab
     } else {
         $segments[] = sprintf(
             'Date %s - %s (%d day%s)',
-            (string) $filters['start_date'],
-            (string) $filters['end_date'],
+            format_report_date_label((string) $filters['start_date']),
+            format_report_date_label((string) $filters['end_date']),
             (int) $filters['selected_days'],
             (int) $filters['selected_days'] === 1 ? '' : 's'
         );
@@ -547,7 +552,7 @@ if ($filter_type === 'year') {
 } else {
     $bar_rows = execute_prepared_query(
         $mysqli,
-        sprintf($bar_sql, 'COALESCE(lr.booking_date, lb.booking_date)', 'DATE_FORMAT(COALESCE(lr.booking_date, lb.booking_date), "%d %b")'),
+        sprintf($bar_sql, 'COALESCE(lr.booking_date, lb.booking_date)', 'DATE_FORMAT(COALESCE(lr.booking_date, lb.booking_date), "%d/%m/%Y")'),
         $types,
         $params
     );
@@ -575,7 +580,7 @@ if ($filter_type === 'year') {
 } else {
     $stacked_rows = execute_prepared_query(
         $mysqli,
-        sprintf($status_bar_sql, 'COALESCE(lr.booking_date, lb.booking_date)', 'DATE_FORMAT(COALESCE(lr.booking_date, lb.booking_date), "%d %b")'),
+        sprintf($status_bar_sql, 'COALESCE(lr.booking_date, lb.booking_date)', 'DATE_FORMAT(COALESCE(lr.booking_date, lb.booking_date), "%d/%m/%Y")'),
         $types,
         $params
     );
@@ -692,7 +697,7 @@ $table = array_map(static function (array $row): array {
         'user_id' => (int) $row['user_id'],
         'cluster_name' => (string) $row['cluster_name'],
         'lab_name' => (string) $row['lab_name'],
-        'booking_date' => (string) $row['booking_date'],
+        'booking_date' => format_report_date_label((string) $row['booking_date']),
         'start_time' => $row['start_time'] ? substr((string) $row['start_time'], 0, 5) : '',
         'end_time' => $row['end_time'] ? substr((string) $row['end_time'], 0, 5) : '',
         'time_slot' => (string) ($row['time_slot'] ?? ''),
@@ -709,6 +714,7 @@ $average_hours = $total_bookings > 0 ? round($total_hours / $total_bookings, 2) 
 report_json_response([
     'success' => true,
     'filter_label' => get_filter_label($filters, $cluster_name, $lab_name),
+    'filter_type' => $filter_type,
     'selected_days' => $selected_days,
     'bar_mode' => $is_scoped_bar ? 'stacked' : 'single',
     'summary' => [

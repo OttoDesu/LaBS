@@ -13,4 +13,5 @@ if (isset($mysqli)) {
     ensure_booking_holds_table($mysqli);
     cleanup_expired_booking_holds($mysqli);
     ensure_lab_supervisor_history($mysqli);
+    ensure_asset_transfer_tables($mysqli);
 }

@@ -318,28 +318,31 @@ $cluster_select_disabled = $is_cluster_admin || (count($report_clusters) <= 1 &&
                         <div class="chart-header">
                             <div>
                                 <p class="badge">Bar Chart</p>
-                                <h3>Booking distribution</h3>
+                                <h3 id="report-bar-title">Booking distribution</h3>
                             </div>
-                            <div class="card-actions">
+                            <div class="report-chart-summary" id="report-bar-summary">
                                 <span class="muted-text" id="report-bar-meta">No data yet</span>
-                                <button class="btn ghost small report-export" type="button" data-chart-target="report-bar-chart" data-export-format="png">Export PNG</button>
-                                <button class="btn ghost small report-export" type="button" data-chart-target="report-bar-chart" data-export-format="pdf">Export PDF</button>
                             </div>
                         </div>
                         <div id="report-bar-chart" class="report-chart-body"><div class="empty-state">Report data will appear here after you submit a filter.</div></div>
+                        <div class="report-chart-actions">
+                            <button class="btn ghost small report-export" type="button" data-chart-target="report-bar-chart" data-export-format="png" disabled>Export PNG</button>
+                            <button class="btn ghost small report-export" type="button" data-chart-target="report-bar-chart" data-export-format="pdf" disabled>Export PDF</button>
+                        </div>
                     </div>
                     <div class="card chart-card">
                         <div class="chart-header">
                             <div>
                                 <p class="badge">Pie Chart</p>
-                                <h3>Status distribution</h3>
+                                <h3 id="report-pie-title">Status distribution</h3>
                             </div>
-                            <div class="card-actions">
-                                <button class="btn ghost small report-export" type="button" data-chart-target="report-pie-chart" data-export-format="png">Export PNG</button>
-                                <button class="btn ghost small report-export" type="button" data-chart-target="report-pie-chart" data-export-format="pdf">Export PDF</button>
-                            </div>
+                            <span class="muted-text" id="report-pie-meta">No data yet</span>
                         </div>
                         <div id="report-pie-chart" class="report-chart-body"><div class="empty-state">Report data will appear here after you submit a filter.</div></div>
+                        <div class="report-chart-actions">
+                            <button class="btn ghost small report-export" type="button" data-chart-target="report-pie-chart" data-export-format="png" disabled>Export PNG</button>
+                            <button class="btn ghost small report-export" type="button" data-chart-target="report-pie-chart" data-export-format="pdf" disabled>Export PDF</button>
+                        </div>
                     </div>
                 </div>
 
