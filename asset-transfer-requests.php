@@ -695,17 +695,21 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                                             <td><span class="badge <?php echo $status_class; ?>"><?php echo htmlspecialchars(ucfirst($request['status'])); ?></span></td>
                                             <td>
                                                 <?php if ($can_approve): ?>
-                                                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Approve this transfer request?');">
-                                                        <input type="hidden" name="action" value="approve_request">
-                                                        <input type="hidden" name="request_id" value="<?php echo (int) $request['request_id']; ?>">
-                                                        <button class="btn primary small" type="submit">Approve</button>
-                                                    </form>
-                                                    <form method="POST" class="inline-action-form">
-                                                        <input type="hidden" name="action" value="reject_request">
-                                                        <input type="hidden" name="request_id" value="<?php echo (int) $request['request_id']; ?>">
-                                                        <input name="rejection_reason" type="text" placeholder="Rejection reason" required>
-                                                        <button class="btn danger small" type="submit">Reject</button>
-                                                    </form>
+                                                    <div class="transfer-decision-actions">
+                                                        <form method="POST" class="inline-action-form" onsubmit="return confirm('Approve this transfer request?');">
+                                                            <input type="hidden" name="action" value="approve_request">
+                                                            <input type="hidden" name="request_id" value="<?php echo (int) $request['request_id']; ?>">
+                                                            <button class="btn primary small" type="submit">Approve</button>
+                                                        </form>
+                                                        <button
+                                                            class="btn danger small reject-transfer-button"
+                                                            type="button"
+                                                            data-request-id="<?php echo (int) $request['request_id']; ?>"
+                                                            data-asset-name="<?php echo htmlspecialchars($request['asset_name']); ?>"
+                                                        >
+                                                            Reject
+                                                        </button>
+                                                    </div>
                                                 <?php elseif ($request['status'] === 'approved'): ?>
                                                     <?php echo htmlspecialchars($request['approved_by_name'] ?? '-'); ?><br>
                                                     <span class="muted-text"><?php echo htmlspecialchars(format_display_date($request['approved_at'])); ?></span>
@@ -743,6 +747,34 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
         </div>
     </div>
 
+    <div class="modal" id="reject-transfer-modal">
+        <div class="modal-content">
+            <form method="POST">
+                <input type="hidden" name="action" value="reject_request">
+                <input type="hidden" name="request_id" id="reject-transfer-request-id">
+                <div class="modal-header">
+                    <h2>Reject Transfer Request</h2>
+                    <button class="icon-button" type="button" data-close="reject-transfer-modal" aria-label="Close">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M4 4L12 12M12 4L4 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p class="muted-text" id="reject-transfer-summary">Please provide a reason for rejecting this transfer request.</p>
+                    <div>
+                        <label for="reject-transfer-reason">Rejection Reason</label>
+                        <textarea id="reject-transfer-reason" name="rejection_reason" rows="4" required></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn ghost" type="button" data-close="reject-transfer-modal">Cancel</button>
+                    <button class="btn danger" type="submit">Reject Request</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         window.LABS_USER = <?php echo json_encode($user_payload); ?>;
         window.LABS_LOGIN_URL = 'index.php';
@@ -767,6 +799,42 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                         quantityInput.value = maxQuantity;
                     }
                 }
+            });
+        })();
+        (function () {
+            var modal = document.getElementById('reject-transfer-modal');
+            var requestInput = document.getElementById('reject-transfer-request-id');
+            var reasonInput = document.getElementById('reject-transfer-reason');
+            var summary = document.getElementById('reject-transfer-summary');
+
+            function closeModal() {
+                if (modal) {
+                    modal.classList.remove('active');
+                }
+            }
+
+            document.querySelectorAll('.reject-transfer-button').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    if (!modal || !requestInput) {
+                        return;
+                    }
+                    requestInput.value = button.getAttribute('data-request-id') || '';
+                    if (reasonInput) {
+                        reasonInput.value = '';
+                    }
+                    if (summary) {
+                        var assetName = button.getAttribute('data-asset-name') || 'this asset';
+                        summary.textContent = 'Please provide a reason for rejecting the transfer request for ' + assetName + '.';
+                    }
+                    modal.classList.add('active');
+                    if (reasonInput) {
+                        reasonInput.focus();
+                    }
+                });
+            });
+
+            document.querySelectorAll('[data-close="reject-transfer-modal"]').forEach(function (button) {
+                button.addEventListener('click', closeModal);
             });
         })();
     </script>
