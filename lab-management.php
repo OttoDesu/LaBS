@@ -297,6 +297,9 @@ $user_payload = [
     'email' => $_SESSION['user_email'] ?? '',
     'userType' => $user_type
 ];
+$export_params = [
+    'type' => 'labs'
+];
 $layout_path = __DIR__ . '/templates/layouts/admin.php';
 if ($is_lab_supervisor) {
     $layout_path = __DIR__ . '/templates/layouts/lab_supervisor.php';
@@ -399,6 +402,9 @@ $active = 'lab-management';
                                 <h2>Lab Scope</h2>
                                 <p><?php echo $lab_scope_labs ? 'Select a lab card below to focus on the lab you manage.' : 'Manage labs assigned to your supervisor scope.'; ?></p>
                             </div>
+                            <div class="banner-links">
+                                <a class="btn ghost" href="management-export.php?<?php echo htmlspecialchars(http_build_query($export_params)); ?>">Export Excel</a>
+                            </div>
                         </div>
                         <?php if (!$lab_scope_labs): ?>
                             <p class="muted-text">No labs assigned to your scope yet.</p>
@@ -446,6 +452,7 @@ $active = 'lab-management';
                                 <p>Select a cluster to view supervisors.</p>
                             </div>
                             <div class="banner-links">
+                                <a class="btn ghost" href="management-export.php?<?php echo htmlspecialchars(http_build_query($export_params)); ?>">Export Excel</a>
                                 <?php if (!$is_super_admin && $admin_cluster_id): ?>
                                     <a class="btn ghost" href="lab-management-cluster.php?cluster=<?php echo (int) $admin_cluster_id; ?>">Open Supervisors</a>
                                 <?php endif; ?>

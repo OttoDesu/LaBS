@@ -1130,6 +1130,14 @@ body {
     color: var(--danger);
 }
 
+.asset-status-reason {
+    margin-top: 6px;
+    max-width: 320px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
 .inline-action-form {
     display: inline-flex;
     margin-left: 8px;
@@ -1355,6 +1363,11 @@ th {
     background: #fdecea;
     color: var(--danger);
     border-color: #f4b4ad;
+}
+
+.hold-resume-emphasis {
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
 
 .banner {

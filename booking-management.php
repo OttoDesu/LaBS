@@ -5,6 +5,7 @@ require_login();
 $user_type = $_SESSION['user_type'] ?? 'public';
 require_management();
 $admin_cluster_id = get_admin_cluster_id();
+$user_id = (int) ($_SESSION['user_id'] ?? 0);
 $is_super_admin = is_super_admin($user_type);
 $is_lab_supervisor = is_lab_supervisor($user_type);
 $lab_scope_ids = [];
@@ -21,6 +22,34 @@ $cluster_filter = (int) ($_GET['cluster'] ?? 0);
 $booking_pk = get_booking_pk_column($mysqli);
 $page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
 
+function ensure_booking_rejected_by_column(mysqli $mysqli): void {
+    static $ensured = false;
+    if ($ensured) {
+        return;
+    }
+
+    $column_exists = false;
+    $column_stmt = $mysqli->prepare("
+        SELECT 1
+        FROM information_schema.COLUMNS
+        WHERE table_schema = DATABASE()
+          AND table_name = 'lab_bookings'
+          AND column_name = 'rejected_by'
+        LIMIT 1
+    ");
+    if ($column_stmt) {
+        $column_stmt->execute();
+        $column_exists = (bool) $column_stmt->get_result()->fetch_assoc();
+        $column_stmt->close();
+    }
+
+    if (!$column_exists) {
+        $mysqli->query('ALTER TABLE lab_bookings ADD COLUMN rejected_by BIGINT(20) UNSIGNED DEFAULT NULL AFTER rejection_reason');
+    }
+
+    $ensured = true;
+}
+
 function paginate_items(array $items, $current_page, $per_page) {
     $total_items = count($items);
     $total_pages = max(1, (int) ceil($total_items / $per_page));
@@ -35,6 +64,8 @@ function paginate_items(array $items, $current_page, $per_page) {
         'per_page' => $per_page
     ];
 }
+
+ensure_booking_rejected_by_column($mysqli);
 
 $clusters = [];
 if ($is_super_admin) {
@@ -87,20 +118,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($is_super_admin) {
                 $stmt = $mysqli->prepare("
                     UPDATE lab_bookings
-                    SET status = 'Rejected', rejection_reason = ?, updated_at = NOW()
+                    SET status = 'Rejected', rejection_reason = ?, rejected_by = ?, updated_at = NOW()
                     WHERE {$booking_pk} = ? AND status = 'Approved'
                 ");
-                $stmt->bind_param('si', $rejection_reason, $booking_id);
+                $stmt->bind_param('sii', $rejection_reason, $user_id, $booking_id);
             } elseif ($is_lab_supervisor) {
                 if ($lab_scope_ids) {
                     $placeholders = implode(',', array_fill(0, count($lab_scope_ids), '?'));
                     $types = str_repeat('i', count($lab_scope_ids));
                     $stmt = $mysqli->prepare("
                         UPDATE lab_bookings
-                        SET status = 'Rejected', rejection_reason = ?, updated_at = NOW()
+                        SET status = 'Rejected', rejection_reason = ?, rejected_by = ?, updated_at = NOW()
                         WHERE {$booking_pk} = ? AND status = 'Approved' AND lab_id IN ($placeholders)
                     ");
-                    $stmt->bind_param('si' . $types, $rejection_reason, $booking_id, ...$lab_scope_ids);
+                    $stmt->bind_param('sii' . $types, $rejection_reason, $user_id, $booking_id, ...$lab_scope_ids);
                 } else {
                     $errors[] = 'You do not have access to that booking.';
                     $stmt = null;
@@ -109,10 +140,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $mysqli->prepare("
                     UPDATE lab_bookings lb
                     JOIN labs l ON l.lab_id = lb.lab_id
-                    SET lb.status = 'Rejected', lb.rejection_reason = ?, lb.updated_at = NOW()
+                    SET lb.status = 'Rejected', lb.rejection_reason = ?, lb.rejected_by = ?, lb.updated_at = NOW()
                     WHERE lb.{$booking_pk} = ? AND lb.status = 'Approved' AND l.cluster_id = ?
                 ");
-                $stmt->bind_param('sii', $rejection_reason, $booking_id, $admin_cluster_id);
+                $stmt->bind_param('siii', $rejection_reason, $user_id, $booking_id, $admin_cluster_id);
             }
             if ($stmt) {
                 $stmt->execute();
@@ -179,11 +210,12 @@ if ($status_filter === 'all') {
         if ($cluster_filter > 0) {
             $stmt = $mysqli->prepare('
                 SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
                 JOIN users u ON lb.user_id = u.id
+                LEFT JOIN users ru ON ru.id = lb.rejected_by
                 WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
                   AND c.cluster_id = ?
                 ORDER BY lb.created_at DESC
@@ -192,11 +224,12 @@ if ($status_filter === 'all') {
         } else {
             $stmt = $mysqli->prepare('
                 SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
                 JOIN users u ON lb.user_id = u.id
+                LEFT JOIN users ru ON ru.id = lb.rejected_by
                 WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
                 ORDER BY lb.created_at DESC
             ');
@@ -208,11 +241,12 @@ if ($status_filter === 'all') {
             $types = str_repeat('i', count($lab_scope_ids));
             $stmt = $mysqli->prepare('
                 SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
                 JOIN users u ON lb.user_id = u.id
+                LEFT JOIN users ru ON ru.id = lb.rejected_by
                 WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
                   AND lb.lab_id IN (' . $placeholders . ')
                 ORDER BY lb.created_at DESC
@@ -224,11 +258,12 @@ if ($status_filter === 'all') {
     } else {
         $stmt = $mysqli->prepare('
             SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
             FROM lab_bookings lb
             JOIN labs l ON lb.lab_id = l.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
             JOIN users u ON lb.user_id = u.id
+            LEFT JOIN users ru ON ru.id = lb.rejected_by
             WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
               AND l.cluster_id = ?
             ORDER BY lb.created_at DESC
@@ -240,11 +275,12 @@ if ($status_filter === 'all') {
         if ($cluster_filter > 0) {
             $stmt = $mysqli->prepare('
                 SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
                 JOIN users u ON lb.user_id = u.id
+                LEFT JOIN users ru ON ru.id = lb.rejected_by
                 WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
                   AND lb.status = ?
                   AND c.cluster_id = ?
@@ -254,11 +290,12 @@ if ($status_filter === 'all') {
         } else {
             $stmt = $mysqli->prepare('
                 SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
                 JOIN users u ON lb.user_id = u.id
+                LEFT JOIN users ru ON ru.id = lb.rejected_by
                 WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
                   AND lb.status = ?
                 ORDER BY lb.created_at DESC
@@ -271,11 +308,12 @@ if ($status_filter === 'all') {
             $types = str_repeat('i', count($lab_scope_ids));
             $stmt = $mysqli->prepare('
                 SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
                 FROM lab_bookings lb
                 JOIN labs l ON lb.lab_id = l.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
                 JOIN users u ON lb.user_id = u.id
+                LEFT JOIN users ru ON ru.id = lb.rejected_by
                 WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
                   AND lb.status = ?
                   AND lb.lab_id IN (' . $placeholders . ')
@@ -288,11 +326,12 @@ if ($status_filter === 'all') {
     } else {
         $stmt = $mysqli->prepare('
             SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason, lb.created_at, lb.updated_at,
-                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email
+                       l.lab_name, c.cluster_name, u.name AS user_name, u.email AS user_email, ru.name AS rejected_by_name
             FROM lab_bookings lb
             JOIN labs l ON lb.lab_id = l.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
             JOIN users u ON lb.user_id = u.id
+            LEFT JOIN users ru ON ru.id = lb.rejected_by
             WHERE (u.name LIKE ? OR u.email LIKE ? OR l.lab_name LIKE ? OR lb.' . $booking_pk . ' LIKE ?)
               AND lb.status = ?
               AND l.cluster_id = ?
@@ -318,6 +357,14 @@ $pagination_params = [
 ];
 if ($is_super_admin) {
     $pagination_params['cluster'] = $cluster_filter;
+}
+$export_params = [
+    'type' => 'bookings',
+    'search' => $search,
+    'status' => $status_filter
+];
+if ($is_super_admin) {
+    $export_params['cluster'] = $cluster_filter;
 }
 
 
@@ -427,6 +474,15 @@ $active = 'booking-management';
                 <?php endif; ?>
 
                 <div class="card booking-management-card">
+                    <div class="banner">
+                        <div>
+                            <h2>Bookings</h2>
+                            <p>Filter booking records and export the current view.</p>
+                        </div>
+                        <div class="banner-links">
+                            <a class="btn ghost" href="management-export.php?<?php echo htmlspecialchars(http_build_query($export_params)); ?>">Export Excel</a>
+                        </div>
+                    </div>
                     <form class="filters management-filters" method="GET" action="booking-management.php">
                         <input type="text" name="search" placeholder="Search by user, lab, or booking ID" value="<?php echo htmlspecialchars($search); ?>">
                         <?php if ($is_super_admin): ?>
@@ -463,7 +519,7 @@ $active = 'booking-management';
                                     <th>Date</th>
                                     <th>Time Slot</th>
                                     <th>Status</th>
-                                    <th>Notes</th>
+                                    <th>Reasons</th>
                                     <th>Action</th>
                                 </tr>
                             </thead>
@@ -508,9 +564,14 @@ $active = 'booking-management';
                                                 <div class="muted-text status-log">
                                                     <?php echo htmlspecialchars($status_event_label); ?>: <?php echo htmlspecialchars(format_display_date($status_event_time)); ?>
                                                 </div>
+                                                <?php if ($booking['status'] === 'Rejected'): ?>
+                                                    <div class="muted-text status-log">
+                                                        Rejected by: <?php echo htmlspecialchars($booking['rejected_by_name'] ?: 'Not recorded'); ?>
+                                                    </div>
+                                                <?php endif; ?>
                                             <?php endif; ?>
                                         </td>
-                                        <td data-label="Notes"><?php echo htmlspecialchars($note); ?></td>
+                                        <td data-label="Reasons"><?php echo htmlspecialchars($note); ?></td>
                                         <td data-label="Action">
                                             <div class="action-buttons">
                                             <a class="btn ghost" href="booking-details.php?booking_id=<?php echo (int) $booking['booking_id']; ?>">View</a>

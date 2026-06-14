@@ -501,6 +501,12 @@ $user_payload = [
     'email' => $_SESSION['user_email'] ?? '',
     'userType' => $user_type
 ];
+$export_params = [
+    'type' => 'users',
+    'search' => $search,
+    'role' => $role_filter,
+    'cluster' => $cluster_filter
+];
 $layout_path = __DIR__ . '/templates/layouts/admin.php';
 $layout_path = $is_lab_supervisor ? __DIR__ . '/templates/layouts/lab_supervisor.php' : $layout_path;
 $layout = require $layout_path;
@@ -604,6 +610,7 @@ $active = 'user-management';
                             <p>Search users by name, email, or IC number.</p>
                         </div>
                         <div class="banner-links">
+                            <a class="btn ghost" href="management-export.php?<?php echo htmlspecialchars(http_build_query($export_params)); ?>">Export Excel</a>
                             <?php if ($can_manage_users): ?>
                                 <button class="btn ghost" type="button">Upload CSV</button>
                                 <button class="btn primary" type="button" data-modal="add-user-modal">Add User</button>

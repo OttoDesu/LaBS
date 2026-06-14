@@ -53,12 +53,36 @@ $mysqli->query('
         lab_id BIGINT(20) UNSIGNED NOT NULL,
         asset_name VARCHAR(255) NOT NULL,
         asset_status VARCHAR(50) NOT NULL,
+        asset_unavailable_reason TEXT DEFAULT NULL,
         asset_count INT NOT NULL DEFAULT 0,
         created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         CONSTRAINT fk_assets_lab FOREIGN KEY (lab_id) REFERENCES labs(lab_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 ');
+
+function ensure_asset_unavailable_reason_column(mysqli $mysqli): void {
+    $column_exists = false;
+    $column_stmt = $mysqli->prepare("
+        SELECT 1
+        FROM information_schema.COLUMNS
+        WHERE table_schema = DATABASE()
+          AND table_name = 'assets'
+          AND column_name = 'asset_unavailable_reason'
+        LIMIT 1
+    ");
+    if ($column_stmt) {
+        $column_stmt->execute();
+        $column_exists = (bool) $column_stmt->get_result()->fetch_assoc();
+        $column_stmt->close();
+    }
+
+    if (!$column_exists) {
+        $mysqli->query("ALTER TABLE assets ADD COLUMN asset_unavailable_reason TEXT DEFAULT NULL AFTER asset_status");
+    }
+}
+
+ensure_asset_unavailable_reason_column($mysqli);
 
 $errors = [];
 $selected_lab = isset($_GET['lab']) ? (int) $_GET['lab'] : 0;
@@ -77,6 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $lab_id = (int) ($_POST['lab_id'] ?? 0);
     $asset_name = trim($_POST['asset_name'] ?? '');
     $asset_status = trim($_POST['asset_status'] ?? '');
+    $asset_unavailable_reason = trim($_POST['asset_unavailable_reason'] ?? '');
     $asset_count = (int) ($_POST['asset_count'] ?? 0);
 
     if ($lab_id <= 0) {
@@ -87,6 +112,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     if ($asset_status === '') {
         $errors[] = 'Asset status is required.';
+    }
+    if ($asset_status === 'Unavailable' && $asset_unavailable_reason === '') {
+        $errors[] = 'Unavailable reason is required.';
+    }
+    if ($asset_status !== 'Unavailable') {
+        $asset_unavailable_reason = null;
     }
     if ($asset_count < 0) {
         $errors[] = 'Asset count must be zero or more.';
@@ -100,10 +131,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errors && $action === 'add_asset') {
         $stmt = $mysqli->prepare('
-            INSERT INTO assets (lab_id, asset_name, asset_status, asset_count, created_at, updated_at)
-            VALUES (?, ?, ?, ?, NOW(), NOW())
+            INSERT INTO assets (lab_id, asset_name, asset_status, asset_unavailable_reason, asset_count, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, NOW(), NOW())
         ');
-        $stmt->bind_param('issi', $lab_id, $asset_name, $asset_status, $asset_count);
+        $stmt->bind_param('isssi', $lab_id, $asset_name, $asset_status, $asset_unavailable_reason, $asset_count);
         $stmt->execute();
         $stmt->close();
         set_flash('info', 'Asset added successfully.');
@@ -120,10 +151,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$errors && $action === 'update_asset' && $asset_id > 0) {
         $stmt = $mysqli->prepare('
             UPDATE assets
-            SET lab_id = ?, asset_name = ?, asset_status = ?, asset_count = ?, updated_at = NOW()
+            SET lab_id = ?, asset_name = ?, asset_status = ?, asset_unavailable_reason = ?, asset_count = ?, updated_at = NOW()
             WHERE asset_id = ?
         ');
-        $stmt->bind_param('issii', $lab_id, $asset_name, $asset_status, $asset_count, $asset_id);
+        $stmt->bind_param('isssii', $lab_id, $asset_name, $asset_status, $asset_unavailable_reason, $asset_count, $asset_id);
         $stmt->execute();
         $stmt->close();
         set_flash('info', 'Asset updated successfully.');
@@ -341,7 +372,7 @@ $search_like = '%' . $search . '%';
 if ($selected_lab > 0) {
     if ($is_super_admin) {
         $assets_stmt = $mysqli->prepare('
-            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
+            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_unavailable_reason, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
             FROM assets a
             JOIN labs l ON l.lab_id = a.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -352,7 +383,7 @@ if ($selected_lab > 0) {
     } elseif ($is_lab_supervisor) {
         if (in_array($selected_lab, $lab_scope_ids, true)) {
             $assets_stmt = $mysqli->prepare('
-                SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
+                SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_unavailable_reason, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
                 FROM assets a
                 JOIN labs l ON l.lab_id = a.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -365,7 +396,7 @@ if ($selected_lab > 0) {
         }
     } else {
         $assets_stmt = $mysqli->prepare('
-            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
+            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_unavailable_reason, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
             FROM assets a
             JOIN labs l ON l.lab_id = a.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -377,7 +408,7 @@ if ($selected_lab > 0) {
 } else {
     if ($is_super_admin) {
         $assets_stmt = $mysqli->prepare('
-            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
+            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_unavailable_reason, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
             FROM assets a
             JOIN labs l ON l.lab_id = a.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -390,7 +421,7 @@ if ($selected_lab > 0) {
             $placeholders = implode(',', array_fill(0, count($lab_scope_ids), '?'));
             $types = str_repeat('i', count($lab_scope_ids));
             $assets_stmt = $mysqli->prepare('
-                SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
+                SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_unavailable_reason, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
                 FROM assets a
                 JOIN labs l ON l.lab_id = a.lab_id
                 JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -403,7 +434,7 @@ if ($selected_lab > 0) {
         }
     } else {
         $assets_stmt = $mysqli->prepare('
-            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
+            SELECT a.asset_id, a.asset_name, a.asset_status, a.asset_unavailable_reason, a.asset_count, l.lab_id, l.lab_name, c.cluster_name
             FROM assets a
             JOIN labs l ON l.lab_id = a.lab_id
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -439,6 +470,7 @@ if ($is_super_admin) {
                 a.asset_id,
                 a.asset_name,
                 a.asset_status,
+                a.asset_unavailable_reason,
                 a.asset_count
             FROM labs l
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -486,6 +518,7 @@ if ($is_super_admin) {
                     'asset_id' => (int) $row['asset_id'],
                     'asset_name' => $row['asset_name'],
                     'asset_status' => $row['asset_status'],
+                    'asset_unavailable_reason' => $row['asset_unavailable_reason'],
                     'asset_count' => (int) $row['asset_count']
                 ];
             }
@@ -506,6 +539,7 @@ if ($is_super_admin) {
                 a.asset_id,
                 a.asset_name,
                 a.asset_status,
+                a.asset_unavailable_reason,
                 a.asset_count
             FROM labs l
             JOIN clusters c ON c.cluster_id = l.cluster_id
@@ -533,6 +567,7 @@ if ($is_super_admin) {
                     'asset_id' => (int) $row['asset_id'],
                     'asset_name' => $row['asset_name'],
                     'asset_status' => $row['asset_status'],
+                    'asset_unavailable_reason' => $row['asset_unavailable_reason'],
                     'asset_count' => (int) $row['asset_count']
                 ];
             }
@@ -552,6 +587,7 @@ if ($is_super_admin) {
                 a.asset_id,
                 a.asset_name,
                 a.asset_status,
+                a.asset_unavailable_reason,
                 a.asset_count
             FROM labs l
             LEFT JOIN supervisors s ON s.supervisor_id = l.supervisor_id
@@ -589,6 +625,7 @@ if ($is_super_admin) {
                     'asset_id' => (int) $row['asset_id'],
                     'asset_name' => $row['asset_name'],
                     'asset_status' => $row['asset_status'],
+                    'asset_unavailable_reason' => $row['asset_unavailable_reason'],
                     'asset_count' => (int) $row['asset_count']
                 ];
             }
@@ -607,6 +644,13 @@ $user_payload = [
     'name' => $_SESSION['user_name'] ?? 'User',
     'email' => $_SESSION['user_email'] ?? '',
     'userType' => $user_type
+];
+$export_params = [
+    'type' => 'assets',
+    'search' => $search,
+    'lab' => $selected_lab,
+    'cluster' => $selected_cluster,
+    'supervisor' => $selected_supervisor
 ];
 $layout_path = __DIR__ . '/templates/layouts/admin.php';
 if ($is_lab_supervisor) {
@@ -712,6 +756,7 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                             <p>Assign assets to labs and track availability.</p>
                         </div>
                         <div class="banner-links">
+                            <a class="btn ghost" href="management-export.php?<?php echo htmlspecialchars(http_build_query($export_params)); ?>">Export Excel</a>
                             <?php if ($can_edit_assets): ?>
                                 <button class="btn primary" type="button" data-modal="asset-modal">Add Asset</button>
                             <?php endif; ?>
@@ -941,6 +986,10 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                             <option value="Disposed">Disposed</option>
                         </select>
                     </div>
+                    <div id="asset-unavailable-reason-field" hidden>
+                        <label for="asset-unavailable-reason">Why unavailable?</label>
+                        <textarea id="asset-unavailable-reason" name="asset_unavailable_reason" rows="3" placeholder="State why this asset is unavailable"></textarea>
+                    </div>
                     <div>
                         <label for="asset-count">Count</label>
                         <input id="asset-count" name="asset_count" type="number" min="0" value="0" required>
@@ -1035,7 +1084,21 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
             var labSelect = document.getElementById('asset-lab');
             var nameInput = document.getElementById('asset-name');
             var statusInput = document.getElementById('asset-status');
+            var unavailableReasonField = document.getElementById('asset-unavailable-reason-field');
+            var unavailableReasonInput = document.getElementById('asset-unavailable-reason');
             var countInput = document.getElementById('asset-count');
+
+            function syncUnavailableReason() {
+                if (!statusInput || !unavailableReasonField || !unavailableReasonInput) {
+                    return;
+                }
+                var isUnavailable = statusInput.value === 'Unavailable';
+                unavailableReasonField.hidden = !isUnavailable;
+                unavailableReasonInput.required = isUnavailable;
+                if (!isUnavailable) {
+                    unavailableReasonInput.value = '';
+                }
+            }
 
             document.querySelectorAll('.edit-asset').forEach(function (button) {
                 button.addEventListener('click', function () {
@@ -1045,7 +1108,11 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                     labSelect.value = button.getAttribute('data-lab-id');
                     nameInput.value = button.getAttribute('data-name');
                     statusInput.value = button.getAttribute('data-status');
+                    if (unavailableReasonInput) {
+                        unavailableReasonInput.value = button.getAttribute('data-unavailable-reason') || '';
+                    }
                     countInput.value = button.getAttribute('data-count');
+                    syncUnavailableReason();
                     modal.classList.add('active');
                 });
             });
@@ -1057,10 +1124,18 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                     assetId.value = '';
                     nameInput.value = '';
                     statusInput.value = '';
+                    if (unavailableReasonInput) {
+                        unavailableReasonInput.value = '';
+                    }
                     countInput.value = 0;
+                    syncUnavailableReason();
                     modal.classList.add('active');
                 });
             });
+
+            if (statusInput) {
+                statusInput.addEventListener('change', syncUnavailableReason);
+            }
 
             document.querySelectorAll('[data-close="asset-modal"]').forEach(function (button) {
                 button.addEventListener('click', function () {

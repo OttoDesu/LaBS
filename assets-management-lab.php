@@ -18,7 +18,7 @@ $today_date = date('Y-m-d');
 $today_js = htmlspecialchars($today_date, ENT_QUOTES);
 
 function ensure_asset_image_column(mysqli $mysqli) {
-    $column_exists = false;
+    $image_column_exists = false;
     $column_stmt = $mysqli->prepare("
         SELECT 1
         FROM information_schema.COLUMNS
@@ -30,12 +30,32 @@ function ensure_asset_image_column(mysqli $mysqli) {
     if ($column_stmt) {
         $column_stmt->execute();
         $column_result = $column_stmt->get_result();
-        $column_exists = (bool) $column_result->fetch_assoc();
+        $image_column_exists = (bool) $column_result->fetch_assoc();
         $column_stmt->close();
     }
 
-    if (!$column_exists) {
+    if (!$image_column_exists) {
         $mysqli->query("ALTER TABLE assets ADD COLUMN asset_image_path VARCHAR(255) DEFAULT NULL AFTER asset_count");
+    }
+
+    $reason_column_exists = false;
+    $reason_stmt = $mysqli->prepare("
+        SELECT 1
+        FROM information_schema.COLUMNS
+        WHERE table_schema = DATABASE()
+          AND table_name = 'assets'
+          AND column_name = 'asset_unavailable_reason'
+        LIMIT 1
+    ");
+    if ($reason_stmt) {
+        $reason_stmt->execute();
+        $reason_result = $reason_stmt->get_result();
+        $reason_column_exists = (bool) $reason_result->fetch_assoc();
+        $reason_stmt->close();
+    }
+
+    if (!$reason_column_exists) {
+        $mysqli->query("ALTER TABLE assets ADD COLUMN asset_unavailable_reason TEXT DEFAULT NULL AFTER asset_status");
     }
 }
 
@@ -118,6 +138,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit_assets) {
         $posted_lab_id = (int) ($_POST['lab_id'] ?? 0);
         $asset_name = trim((string) ($_POST['asset_name'] ?? ''));
         $asset_status = trim((string) ($_POST['asset_status'] ?? ''));
+        $asset_unavailable_reason = trim((string) ($_POST['asset_unavailable_reason'] ?? ''));
         $asset_count = max(0, (int) ($_POST['asset_count'] ?? 0));
         $upload_error = null;
         $asset_image_path = upload_asset_image('asset_image', $upload_error);
@@ -140,6 +161,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit_assets) {
             exit;
         }
 
+        if ($asset_status === 'Unavailable' && $asset_unavailable_reason === '') {
+            set_flash('error', 'Unavailable reason is required.');
+            header('Location: assets-management-lab.php?lab=' . (int) $lab_id);
+            exit;
+        }
+        if ($asset_status !== 'Unavailable') {
+            $asset_unavailable_reason = null;
+        }
+
         if ($asset_image_path === false) {
             set_flash('error', $upload_error ?: 'Asset image upload failed.');
             header('Location: assets-management-lab.php?lab=' . (int) $lab_id);
@@ -147,10 +177,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit_assets) {
         }
 
         $insert_stmt = $mysqli->prepare('
-            INSERT INTO assets (lab_id, asset_name, asset_status, asset_count, asset_image_path, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, NOW(), NOW())
+            INSERT INTO assets (lab_id, asset_name, asset_status, asset_unavailable_reason, asset_count, asset_image_path, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
         ');
-        $insert_stmt->bind_param('issis', $lab_id, $asset_name, $asset_status, $asset_count, $asset_image_path);
+        $insert_stmt->bind_param('isssis', $lab_id, $asset_name, $asset_status, $asset_unavailable_reason, $asset_count, $asset_image_path);
         $insert_stmt->execute();
         $insert_stmt->close();
 
@@ -164,6 +194,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit_assets) {
         $posted_lab_id = (int) ($_POST['lab_id'] ?? 0);
         $asset_name = trim((string) ($_POST['asset_name'] ?? ''));
         $asset_status = trim((string) ($_POST['asset_status'] ?? ''));
+        $asset_unavailable_reason = trim((string) ($_POST['asset_unavailable_reason'] ?? ''));
         $asset_count = max(0, (int) ($_POST['asset_count'] ?? 0));
         $current_image_path = trim((string) ($_POST['current_asset_image_path'] ?? ''));
         $clear_asset_image = (int) ($_POST['clear_asset_image'] ?? 0) === 1;
@@ -188,6 +219,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit_assets) {
             exit;
         }
 
+        if ($asset_status === 'Unavailable' && $asset_unavailable_reason === '') {
+            set_flash('error', 'Unavailable reason is required.');
+            header('Location: assets-management-lab.php?lab=' . (int) $lab_id);
+            exit;
+        }
+        if ($asset_status !== 'Unavailable') {
+            $asset_unavailable_reason = null;
+        }
+
         if ($new_asset_image_path === false) {
             set_flash('error', $upload_error ?: 'Asset image upload failed.');
             header('Location: assets-management-lab.php?lab=' . (int) $lab_id);
@@ -197,10 +237,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit_assets) {
         $final_image_path = $new_asset_image_path ?: ($clear_asset_image ? null : ($current_image_path !== '' ? $current_image_path : null));
         $update_stmt = $mysqli->prepare('
             UPDATE assets
-            SET asset_name = ?, asset_status = ?, asset_count = ?, asset_image_path = ?, updated_at = NOW()
+            SET asset_name = ?, asset_status = ?, asset_unavailable_reason = ?, asset_count = ?, asset_image_path = ?, updated_at = NOW()
             WHERE asset_id = ? AND lab_id = ?
         ');
-        $update_stmt->bind_param('ssisii', $asset_name, $asset_status, $asset_count, $final_image_path, $asset_id, $lab_id);
+        $update_stmt->bind_param('sssisii', $asset_name, $asset_status, $asset_unavailable_reason, $asset_count, $final_image_path, $asset_id, $lab_id);
         $update_stmt->execute();
         $update_stmt->close();
 
@@ -219,19 +259,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $can_edit_assets) {
     if ($action === 'disable_asset') {
         $asset_id = (int) ($_POST['asset_id'] ?? 0);
         $posted_lab_id = (int) ($_POST['lab_id'] ?? 0);
+        $asset_unavailable_reason = trim((string) ($_POST['asset_unavailable_reason'] ?? ''));
 
         if ($asset_id <= 0 || $posted_lab_id !== $lab_id) {
             set_flash('error', 'Invalid asset selected.');
             header('Location: assets-management-lab.php?lab=' . (int) $lab_id);
             exit;
         }
+        if ($asset_unavailable_reason === '') {
+            set_flash('error', 'Unavailable reason is required.');
+            header('Location: assets-management-lab.php?lab=' . (int) $lab_id);
+            exit;
+        }
 
         $disable_stmt = $mysqli->prepare('
             UPDATE assets
-            SET asset_status = "Unavailable", updated_at = NOW()
+            SET asset_status = "Unavailable", asset_unavailable_reason = ?, updated_at = NOW()
             WHERE asset_id = ? AND lab_id = ?
         ');
-        $disable_stmt->bind_param('ii', $asset_id, $lab_id);
+        $disable_stmt->bind_param('sii', $asset_unavailable_reason, $asset_id, $lab_id);
         $disable_stmt->execute();
         $disable_stmt->close();
 
@@ -348,7 +394,7 @@ if (!$lab) {
 
 $assets = [];
 $assets_stmt = $mysqli->prepare('
-    SELECT asset_id, asset_name, asset_status, asset_count, asset_image_path
+    SELECT asset_id, asset_name, asset_status, asset_unavailable_reason, asset_count, asset_image_path
     FROM assets
     WHERE lab_id = ?
     ORDER BY asset_name ASC
@@ -518,7 +564,14 @@ $status_options = get_allowed_asset_statuses();
                                                 </div>
                                             </td>
                                             <td><?php echo htmlspecialchars($asset['asset_name']); ?></td>
-                                            <td><span class="asset-status status-<?php echo htmlspecialchars(strtolower($asset['asset_status'])); ?>"><?php echo htmlspecialchars($asset['asset_status']); ?></span></td>
+                                            <td>
+                                                <span class="asset-status status-<?php echo htmlspecialchars(strtolower($asset['asset_status'])); ?>"><?php echo htmlspecialchars($asset['asset_status']); ?></span>
+                                                <?php if ($asset['asset_status'] === 'Unavailable' && trim((string) ($asset['asset_unavailable_reason'] ?? '')) !== ''): ?>
+                                                    <div class="asset-status-reason">
+                                                        Reason: <?php echo htmlspecialchars($asset['asset_unavailable_reason']); ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </td>
                                             <td><?php echo (int) $asset['asset_count']; ?></td>
                                             <?php if ($can_edit_assets): ?>
                                                 <td>
@@ -529,15 +582,17 @@ $status_options = get_allowed_asset_statuses();
                                                         data-lab-id="<?php echo (int) $lab['lab_id']; ?>"
                                                         data-asset-name="<?php echo htmlspecialchars($asset['asset_name']); ?>"
                                                         data-asset-status="<?php echo htmlspecialchars($asset['asset_status']); ?>"
+                                                        data-asset-unavailable-reason="<?php echo htmlspecialchars($asset['asset_unavailable_reason'] ?? ''); ?>"
                                                         data-asset-count="<?php echo htmlspecialchars((string) $asset['asset_count']); ?>"
                                                         data-asset-image-path="<?php echo htmlspecialchars($asset['asset_image_path'] ?? ''); ?>"
                                                     >
                                                         Edit
                                                     </button>
-                                                    <form method="POST" class="inline-action-form" onsubmit="return confirm('Mark this asset as unavailable?');">
+                                                    <form method="POST" class="inline-action-form">
                                                         <input type="hidden" name="action" value="disable_asset">
                                                         <input type="hidden" name="asset_id" value="<?php echo (int) $asset['asset_id']; ?>">
                                                         <input type="hidden" name="lab_id" value="<?php echo (int) $lab['lab_id']; ?>">
+                                                        <input type="hidden" name="asset_unavailable_reason" value="">
                                                         <button class="btn danger small" type="submit">Disable</button>
                                                     </form>
                                                 </td>
@@ -598,6 +653,10 @@ $status_options = get_allowed_asset_statuses();
                                 <?php endforeach; ?>
                             </select>
                         </div>
+                        <div class="asset-unavailable-reason-field" id="asset-unavailable-reason-field" hidden>
+                            <label for="asset-unavailable-reason">Why unavailable?</label>
+                            <textarea id="asset-unavailable-reason" name="asset_unavailable_reason" rows="3" placeholder="State why this asset is unavailable"></textarea>
+                        </div>
                         <div>
                             <label for="asset-count">Count</label>
                             <input id="asset-count" name="asset_count" type="number" min="0" value="0" required>
@@ -653,6 +712,10 @@ $status_options = get_allowed_asset_statuses();
                                 <?php endforeach; ?>
                             </select>
                         </div>
+                        <div class="asset-unavailable-reason-field" id="edit-asset-unavailable-reason-field" hidden>
+                            <label for="edit-asset-unavailable-reason">Why unavailable?</label>
+                            <textarea id="edit-asset-unavailable-reason" name="asset_unavailable_reason" rows="3" placeholder="State why this asset is unavailable"></textarea>
+                        </div>
                         <div>
                             <label for="edit-asset-count">Bill of Assets</label>
                             <input id="edit-asset-count" name="asset_count" type="number" min="0" required>
@@ -684,6 +747,12 @@ $status_options = get_allowed_asset_statuses();
                 var editCurrentAssetImagePath = document.getElementById('edit-current-asset-image-path');
                 var clearAssetImageInput = document.getElementById('edit-clear-asset-image');
                 var clearAssetImageBtn = document.getElementById('clear-asset-image-btn');
+                var addStatusInput = document.getElementById('asset-status');
+                var addReasonField = document.getElementById('asset-unavailable-reason-field');
+                var addReasonInput = document.getElementById('asset-unavailable-reason');
+                var editStatusInput = document.getElementById('edit-asset-status');
+                var editReasonField = document.getElementById('edit-asset-unavailable-reason-field');
+                var editReasonInput = document.getElementById('edit-asset-unavailable-reason');
 
                 if (!editAssetModal) {
                     return;
@@ -721,12 +790,31 @@ $status_options = get_allowed_asset_statuses();
                     setPreview(previewNode, fallbackPath, fallbackText);
                 }
 
+                function syncUnavailableReason(statusInput, reasonField, reasonInput) {
+                    if (!statusInput || !reasonField || !reasonInput) {
+                        return;
+                    }
+                    var isUnavailable = statusInput.value === 'Unavailable';
+                    reasonField.hidden = !isUnavailable;
+                    reasonInput.required = isUnavailable;
+                    if (!isUnavailable) {
+                        reasonInput.value = '';
+                    }
+                }
+
                 document.querySelectorAll('[data-modal="add-asset-modal"]').forEach(function (button) {
                     button.addEventListener('click', function () {
                         if (addAssetModal) {
                             if (addAssetImageInput) {
                                 addAssetImageInput.value = '';
                             }
+                            if (addStatusInput) {
+                                addStatusInput.value = '';
+                            }
+                            if (addReasonInput) {
+                                addReasonInput.value = '';
+                            }
+                            syncUnavailableReason(addStatusInput, addReasonField, addReasonInput);
                             setPreview(addAssetImagePreview, '', 'No image selected.');
                             addAssetModal.classList.add('active');
                         }
@@ -739,6 +827,9 @@ $status_options = get_allowed_asset_statuses();
                         document.getElementById('edit-asset-lab-id').value = button.getAttribute('data-lab-id') || '';
                         document.getElementById('edit-asset-name').value = button.getAttribute('data-asset-name') || '';
                         document.getElementById('edit-asset-status').value = button.getAttribute('data-asset-status') || 'Available';
+                        if (editReasonInput) {
+                            editReasonInput.value = button.getAttribute('data-asset-unavailable-reason') || '';
+                        }
                         document.getElementById('edit-asset-count').value = button.getAttribute('data-asset-count') || 0;
                         editCurrentAssetImagePath.value = button.getAttribute('data-asset-image-path') || '';
                         if (clearAssetImageInput) {
@@ -748,6 +839,7 @@ $status_options = get_allowed_asset_statuses();
                             editAssetImageInput.value = '';
                         }
                         setPreview(editAssetImagePreview, editCurrentAssetImagePath.value, 'No image uploaded.');
+                        syncUnavailableReason(editStatusInput, editReasonField, editReasonInput);
                         editAssetModal.classList.add('active');
                     });
                 });
@@ -778,6 +870,33 @@ $status_options = get_allowed_asset_statuses();
                         setPreview(editAssetImagePreview, '', 'Image will be cleared on save.');
                     });
                 }
+
+                if (addStatusInput) {
+                    addStatusInput.addEventListener('change', function () {
+                        syncUnavailableReason(addStatusInput, addReasonField, addReasonInput);
+                    });
+                }
+
+                if (editStatusInput) {
+                    editStatusInput.addEventListener('change', function () {
+                        syncUnavailableReason(editStatusInput, editReasonField, editReasonInput);
+                    });
+                }
+
+                document.querySelectorAll('form.inline-action-form').forEach(function (form) {
+                    form.addEventListener('submit', function (event) {
+                        var reasonInput = form.querySelector('input[name="asset_unavailable_reason"]');
+                        if (!reasonInput) {
+                            return;
+                        }
+                        var reason = window.prompt('Why is this asset unavailable?');
+                        if (reason === null || reason.trim() === '') {
+                            event.preventDefault();
+                            return;
+                        }
+                        reasonInput.value = reason.trim();
+                    });
+                });
 
                 document.querySelectorAll('[data-close="add-asset-modal"]').forEach(function (button) {
                     button.addEventListener('click', function () {

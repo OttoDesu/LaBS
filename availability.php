@@ -432,11 +432,11 @@ if ($next_month > 12) {
                             href="<?php echo htmlspecialchars($active_hold_resume['link_url']); ?>"
                             data-hold-expires-at-unix="<?php echo (int) $active_hold_resume_expires_at_unix; ?>"
                         >
-                            You have an unfinished booking form for this lab on <?php echo htmlspecialchars(format_display_date((string) ($active_hold_resume['booking_date'] ?? '')) ?: 'selected date'); ?>
+                            You have an <span class="hold-resume-emphasis">unfinished booking</span> form for this lab on <?php echo htmlspecialchars(format_display_date((string) ($active_hold_resume['booking_date'] ?? '')) ?: 'selected date'); ?>
                             <?php if (!empty($active_hold_resume['time_slots'])): ?>
                                 (<?php echo htmlspecialchars(implode(', ', $active_hold_resume['time_slots'])); ?>)
                             <?php endif; ?>
-                            . Time left: <span class="hold-resume-countdown">checking...</span>. Click here to continue before the hold timer ends.
+                            . Time left: <span class="hold-resume-countdown">checking...</span>. <span class="hold-resume-emphasis">Click here</span> to continue before the hold timer ends.
                         </a>
                     <?php endif; ?>
                 </div>
