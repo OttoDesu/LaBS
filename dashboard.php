@@ -110,6 +110,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 $admin_stats = null;
 $admin_chart = [];
+$trend_series = [];
+$trend_chart_mode = 'bar';
+$trend_comparison_label = '';
+$trend_clusters = [];
+$trend_labs = [];
+$trend_cluster_filter = isset($_GET['trend_cluster']) ? (int) $_GET['trend_cluster'] : 0;
+$trend_lab_filter = isset($_GET['trend_lab']) ? (int) $_GET['trend_lab'] : 0;
+$trend_filter_label = 'All accessible clusters and labs';
 if ($is_management) {
     $total_users = 0;
     $total_bookings = 0;
@@ -263,6 +271,122 @@ if ($is_management) {
         $stmt->close();
     }
 
+    if ($is_super_admin) {
+        $result = $mysqli->query('SELECT cluster_id, cluster_name FROM clusters ORDER BY cluster_name');
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $trend_clusters[] = $row;
+            }
+        }
+        $result = $mysqli->query('
+            SELECT l.lab_id, l.lab_name, l.cluster_id, c.cluster_name
+            FROM labs l
+            LEFT JOIN clusters c ON c.cluster_id = l.cluster_id
+            ORDER BY c.cluster_name, l.lab_name
+        ');
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $trend_labs[] = $row;
+            }
+        }
+    } elseif ($is_lab_supervisor) {
+        if ($lab_scope_ids) {
+            $placeholders = implode(',', array_fill(0, count($lab_scope_ids), '?'));
+            $types = str_repeat('i', count($lab_scope_ids));
+            $stmt = $mysqli->prepare("
+                SELECT DISTINCT c.cluster_id, c.cluster_name
+                FROM labs l
+                LEFT JOIN clusters c ON c.cluster_id = l.cluster_id
+                WHERE l.lab_id IN ($placeholders)
+                ORDER BY c.cluster_name
+            ");
+            $stmt->bind_param($types, ...$lab_scope_ids);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            while ($row = $result->fetch_assoc()) {
+                if (!empty($row['cluster_id'])) {
+                    $trend_clusters[] = $row;
+                }
+            }
+            $stmt->close();
+
+            $stmt = $mysqli->prepare("
+                SELECT l.lab_id, l.lab_name, l.cluster_id, c.cluster_name
+                FROM labs l
+                LEFT JOIN clusters c ON c.cluster_id = l.cluster_id
+                WHERE l.lab_id IN ($placeholders)
+                ORDER BY c.cluster_name, l.lab_name
+            ");
+            $stmt->bind_param($types, ...$lab_scope_ids);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            while ($row = $result->fetch_assoc()) {
+                $trend_labs[] = $row;
+            }
+            $stmt->close();
+        }
+    } elseif ($admin_cluster_id > 0) {
+        $stmt = $mysqli->prepare('SELECT cluster_id, cluster_name FROM clusters WHERE cluster_id = ? LIMIT 1');
+        $stmt->bind_param('i', $admin_cluster_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if ($row = $result->fetch_assoc()) {
+            $trend_clusters[] = $row;
+        }
+        $stmt->close();
+
+        $stmt = $mysqli->prepare('
+            SELECT l.lab_id, l.lab_name, l.cluster_id, c.cluster_name
+            FROM labs l
+            LEFT JOIN clusters c ON c.cluster_id = l.cluster_id
+            WHERE l.cluster_id = ?
+            ORDER BY l.lab_name
+        ');
+        $stmt->bind_param('i', $admin_cluster_id);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        while ($row = $result->fetch_assoc()) {
+            $trend_labs[] = $row;
+        }
+        $stmt->close();
+    }
+
+    $accessible_cluster_ids = array_map('intval', array_column($trend_clusters, 'cluster_id'));
+    $accessible_lab_ids = array_map('intval', array_column($trend_labs, 'lab_id'));
+    if ($trend_cluster_filter > 0 && !in_array($trend_cluster_filter, $accessible_cluster_ids, true)) {
+        $trend_cluster_filter = 0;
+    }
+    if ($trend_lab_filter > 0 && !in_array($trend_lab_filter, $accessible_lab_ids, true)) {
+        $trend_lab_filter = 0;
+    }
+    $selected_lab = null;
+    foreach ($trend_labs as $lab) {
+        if ((int) $lab['lab_id'] === $trend_lab_filter) {
+            $selected_lab = $lab;
+            break;
+        }
+    }
+    if ($selected_lab && $trend_cluster_filter > 0 && (int) $selected_lab['cluster_id'] !== $trend_cluster_filter) {
+        $trend_lab_filter = 0;
+        $selected_lab = null;
+    }
+    $selected_cluster_name = '';
+    foreach ($trend_clusters as $cluster) {
+        if ((int) $cluster['cluster_id'] === $trend_cluster_filter) {
+            $selected_cluster_name = $cluster['cluster_name'];
+            break;
+        }
+    }
+    if ($selected_lab) {
+        $trend_filter_label = $selected_lab['lab_name'] . (!empty($selected_lab['cluster_name']) ? ' - ' . $selected_lab['cluster_name'] : '');
+    } elseif ($selected_cluster_name !== '') {
+        $trend_filter_label = $selected_cluster_name . ' - All labs';
+    } elseif (!$is_super_admin && count($trend_clusters) === 1) {
+        $trend_filter_label = $trend_clusters[0]['cluster_name'] . ' - All labs';
+    } elseif ($is_super_admin) {
+        $trend_filter_label = 'All clusters and labs';
+    }
+
     $admin_stats = [
         'total_users' => $total_users,
         'total_bookings' => $total_bookings,
@@ -276,37 +400,53 @@ if ($is_management) {
         $key = date('Y-m-d', strtotime('-' . $i . ' days'));
         $days[$key] = 0;
     }
-    if ($is_super_admin) {
-        $stmt = $mysqli->prepare("SELECT booking_date, COUNT(*) AS total FROM lab_bookings WHERE booking_date >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) GROUP BY booking_date ORDER BY booking_date");
-        $stmt->execute();
-    } elseif ($is_lab_supervisor) {
-        if ($lab_scope_ids) {
+    $trend_where = ['lb.booking_date >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)'];
+    $trend_types = '';
+    $trend_params = [];
+    if ($trend_lab_filter > 0) {
+        $trend_where[] = 'lb.lab_id = ?';
+        $trend_types .= 'i';
+        $trend_params[] = $trend_lab_filter;
+    } elseif ($trend_cluster_filter > 0) {
+        $trend_where[] = 'l.cluster_id = ?';
+        $trend_types .= 'i';
+        $trend_params[] = $trend_cluster_filter;
+    } elseif (!$is_super_admin) {
+        if ($is_lab_supervisor && $lab_scope_ids) {
             $placeholders = implode(',', array_fill(0, count($lab_scope_ids), '?'));
-            $types = str_repeat('i', count($lab_scope_ids));
-            $stmt = $mysqli->prepare("
-                SELECT booking_date, COUNT(*) AS total
-                FROM lab_bookings
-                WHERE booking_date >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
-                  AND lab_id IN ($placeholders)
-                GROUP BY booking_date
-                ORDER BY booking_date
-            ");
-            $stmt->bind_param($types, ...$lab_scope_ids);
-            $stmt->execute();
+            $trend_where[] = "lb.lab_id IN ($placeholders)";
+            $trend_types .= str_repeat('i', count($lab_scope_ids));
+            $trend_params = array_merge($trend_params, $lab_scope_ids);
+        } elseif (!$is_lab_supervisor && $admin_cluster_id > 0) {
+            $trend_where[] = 'l.cluster_id = ?';
+            $trend_types .= 'i';
+            $trend_params[] = $admin_cluster_id;
         } else {
-            $stmt = null;
+            $trend_where[] = '1 = 0';
         }
+    }
+    $stmt = null;
+    $trend_sql = '
+        SELECT lb.booking_date, COUNT(*) AS total
+        FROM lab_bookings lb
+        JOIN labs l ON l.lab_id = lb.lab_id
+        WHERE ' . implode(' AND ', $trend_where) . '
+        GROUP BY lb.booking_date
+        ORDER BY lb.booking_date
+    ';
+    if ($trend_types !== '') {
+        $stmt = $mysqli->prepare($trend_sql);
+        $stmt->bind_param($trend_types, ...$trend_params);
+        $stmt->execute();
     } else {
         $stmt = $mysqli->prepare("
             SELECT lb.booking_date, COUNT(*) AS total
             FROM lab_bookings lb
             JOIN labs l ON l.lab_id = lb.lab_id
             WHERE lb.booking_date >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
-              AND l.cluster_id = ?
             GROUP BY lb.booking_date
             ORDER BY lb.booking_date
         ");
-        $stmt->bind_param('i', $admin_cluster_id);
         $stmt->execute();
     }
     if ($stmt) {
@@ -324,6 +464,87 @@ if ($is_management) {
             'date' => $date_key,
             'count' => $count
         ];
+    }
+
+    if ($trend_lab_filter === 0) {
+        $trend_chart_mode = 'line';
+        $series_days_template = array_fill_keys(array_keys($days), 0);
+        $series_colors = ['#2563eb', '#16a34a', '#dc2626', '#9333ea', '#f59e0b', '#0891b2', '#db2777', '#475569', '#65a30d', '#ea580c'];
+        $series_map = [];
+        $series_index = 0;
+
+        if ($is_super_admin && $trend_cluster_filter === 0) {
+            $trend_comparison_label = 'Cluster comparison';
+            $stmt = $mysqli->prepare('
+                SELECT c.cluster_id AS series_id, c.cluster_name AS series_name, lb.booking_date, COUNT(*) AS total
+                FROM lab_bookings lb
+                JOIN labs l ON l.lab_id = lb.lab_id
+                JOIN clusters c ON c.cluster_id = l.cluster_id
+                WHERE lb.booking_date >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)
+                GROUP BY c.cluster_id, c.cluster_name, lb.booking_date
+                ORDER BY c.cluster_name, lb.booking_date
+            ');
+            $stmt->execute();
+        } else {
+            $trend_comparison_label = 'Lab comparison';
+            $series_where = ['lb.booking_date >= DATE_SUB(CURDATE(), INTERVAL 6 DAY)'];
+            $series_types = '';
+            $series_params = [];
+            if ($trend_cluster_filter > 0) {
+                $series_where[] = 'l.cluster_id = ?';
+                $series_types .= 'i';
+                $series_params[] = $trend_cluster_filter;
+            } elseif ($is_lab_supervisor && $lab_scope_ids) {
+                $placeholders = implode(',', array_fill(0, count($lab_scope_ids), '?'));
+                $series_where[] = "lb.lab_id IN ($placeholders)";
+                $series_types .= str_repeat('i', count($lab_scope_ids));
+                $series_params = array_merge($series_params, $lab_scope_ids);
+            } elseif (!$is_super_admin && $admin_cluster_id > 0) {
+                $series_where[] = 'l.cluster_id = ?';
+                $series_types .= 'i';
+                $series_params[] = $admin_cluster_id;
+            } else {
+                $series_where[] = '1 = 0';
+            }
+            $stmt = $mysqli->prepare('
+                SELECT l.lab_id AS series_id, l.lab_name AS series_name, lb.booking_date, COUNT(*) AS total
+                FROM lab_bookings lb
+                JOIN labs l ON l.lab_id = lb.lab_id
+                WHERE ' . implode(' AND ', $series_where) . '
+                GROUP BY l.lab_id, l.lab_name, lb.booking_date
+                ORDER BY l.lab_name, lb.booking_date
+            ');
+            if ($series_types !== '') {
+                $stmt->bind_param($series_types, ...$series_params);
+            }
+            $stmt->execute();
+        }
+
+        if ($stmt) {
+            $result = $stmt->get_result();
+            while ($row = $result->fetch_assoc()) {
+                $series_id = (string) $row['series_id'];
+                if (!isset($series_map[$series_id])) {
+                    $series_map[$series_id] = [
+                        'name' => $row['series_name'] ?: 'Unassigned',
+                        'color' => $series_colors[$series_index % count($series_colors)],
+                        'counts' => $series_days_template,
+                        'total' => 0
+                    ];
+                    $series_index++;
+                }
+                $date_key = $row['booking_date'];
+                if (isset($series_map[$series_id]['counts'][$date_key])) {
+                    $count = (int) $row['total'];
+                    $series_map[$series_id]['counts'][$date_key] = $count;
+                    $series_map[$series_id]['total'] += $count;
+                }
+            }
+            $stmt->close();
+        }
+        $trend_series = array_values(array_filter($series_map, static function ($series) {
+            return (int) ($series['total'] ?? 0) > 0;
+        }));
     }
 
 } else {
@@ -529,8 +750,31 @@ $active = 'dashboard';
                                 <p class="badge">Booking Trends</p>
                                 <h3>Bookings in the last 7 days</h3>
                             </div>
-                            <span class="muted-text">Daily booking count</span>
+                            <span class="muted-text"><?php echo htmlspecialchars($trend_chart_mode === 'line' && $trend_comparison_label !== '' ? $trend_comparison_label : 'Daily booking count'); ?></span>
                         </div>
+                        <form class="filters trend-filters" method="GET" action="dashboard.php">
+                            <?php if ($is_super_admin || count($trend_clusters) > 1): ?>
+                                <select name="trend_cluster">
+                                    <option value="0"<?php echo $trend_cluster_filter === 0 ? ' selected' : ''; ?>>All clusters</option>
+                                    <?php foreach ($trend_clusters as $cluster): ?>
+                                        <option value="<?php echo (int) $cluster['cluster_id']; ?>"<?php echo $trend_cluster_filter === (int) $cluster['cluster_id'] ? ' selected' : ''; ?>>
+                                            <?php echo htmlspecialchars($cluster['cluster_name']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            <?php endif; ?>
+                            <select name="trend_lab">
+                                <option value="0" data-cluster="0"<?php echo $trend_lab_filter === 0 ? ' selected' : ''; ?>>All labs</option>
+                                <?php foreach ($trend_labs as $lab): ?>
+                                    <option value="<?php echo (int) $lab['lab_id']; ?>" data-cluster="<?php echo (int) $lab['cluster_id']; ?>"<?php echo $trend_lab_filter === (int) $lab['lab_id'] ? ' selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($lab['lab_name']); ?><?php echo !empty($lab['cluster_name']) ? ' - ' . htmlspecialchars($lab['cluster_name']) : ''; ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <button class="btn primary" type="submit">Filter</button>
+                            <a class="btn ghost" href="dashboard.php">Reset</a>
+                        </form>
+                        <p class="table-meta">Showing: <?php echo htmlspecialchars($trend_filter_label); ?></p>
                         <?php
                         $max_count = 0;
                         foreach ($admin_chart as $entry) {
@@ -540,8 +784,82 @@ $active = 'dashboard';
                         }
                         $max_count = $max_count > 0 ? $max_count : 1;
                         ?>
-                        <div class="chart-grid">
-                            <?php foreach ($admin_chart as $entry): ?>
+                        <?php if ($trend_chart_mode === 'line'): ?>
+                            <?php
+                            $line_max = 0;
+                            foreach ($trend_series as $series) {
+                                foreach ($series['counts'] as $count) {
+                                    if ($count > $line_max) {
+                                        $line_max = $count;
+                                    }
+                                }
+                            }
+                            $line_max = $line_max > 0 ? $line_max : 1;
+                            $svg_width = 900;
+                            $svg_height = 300;
+                            $pad_left = 48;
+                            $pad_right = 24;
+                            $pad_top = 22;
+                            $pad_bottom = 48;
+                            $plot_width = $svg_width - $pad_left - $pad_right;
+                            $plot_height = $svg_height - $pad_top - $pad_bottom;
+                            $day_keys = array_keys($days);
+                            $day_count = max(1, count($day_keys) - 1);
+                            ?>
+                            <div class="trend-line-wrap">
+                                <?php if ($trend_series): ?>
+                                    <svg class="trend-line-chart" viewBox="0 0 <?php echo $svg_width; ?> <?php echo $svg_height; ?>" role="img" aria-label="Booking trends comparison">
+                                        <?php for ($i = 0; $i <= 4; $i++): ?>
+                                            <?php
+                                            $grid_y = $pad_top + (($plot_height / 4) * $i);
+                                            $grid_value = (int) round($line_max - (($line_max / 4) * $i));
+                                            ?>
+                                            <line class="trend-grid-line" x1="<?php echo $pad_left; ?>" y1="<?php echo $grid_y; ?>" x2="<?php echo $svg_width - $pad_right; ?>" y2="<?php echo $grid_y; ?>"></line>
+                                            <text class="trend-axis-label" x="<?php echo $pad_left - 10; ?>" y="<?php echo $grid_y + 4; ?>" text-anchor="end"><?php echo $grid_value; ?></text>
+                                        <?php endfor; ?>
+                                        <?php foreach ($day_keys as $day_index => $date_key): ?>
+                                            <?php $x = $pad_left + (($plot_width / $day_count) * $day_index); ?>
+                                            <line class="trend-grid-line trend-grid-line-vertical" x1="<?php echo $x; ?>" y1="<?php echo $pad_top; ?>" x2="<?php echo $x; ?>" y2="<?php echo $pad_top + $plot_height; ?>"></line>
+                                            <text class="trend-axis-label" x="<?php echo $x; ?>" y="<?php echo $svg_height - 18; ?>" text-anchor="middle"><?php echo htmlspecialchars(format_display_date($date_key)); ?></text>
+                                        <?php endforeach; ?>
+                                        <?php foreach ($trend_series as $series): ?>
+                                            <?php
+                                            $points = [];
+                                            foreach ($day_keys as $day_index => $date_key) {
+                                                $count = (int) ($series['counts'][$date_key] ?? 0);
+                                                $x = $pad_left + (($plot_width / $day_count) * $day_index);
+                                                $y = $pad_top + ($plot_height - (($count / $line_max) * $plot_height));
+                                                $points[] = round($x, 2) . ',' . round($y, 2);
+                                            }
+                                            ?>
+                                            <polyline class="trend-line" points="<?php echo htmlspecialchars(implode(' ', $points)); ?>" style="stroke: <?php echo htmlspecialchars($series['color']); ?>"></polyline>
+                                            <?php foreach ($day_keys as $day_index => $date_key): ?>
+                                                <?php
+                                                $count = (int) ($series['counts'][$date_key] ?? 0);
+                                                $x = $pad_left + (($plot_width / $day_count) * $day_index);
+                                                $y = $pad_top + ($plot_height - (($count / $line_max) * $plot_height));
+                                                ?>
+                                                <circle class="trend-point" cx="<?php echo round($x, 2); ?>" cy="<?php echo round($y, 2); ?>" r="3.5" style="fill: <?php echo htmlspecialchars($series['color']); ?>">
+                                                    <title><?php echo htmlspecialchars($series['name'] . ': ' . $count . ' booking(s) on ' . format_display_date($date_key)); ?></title>
+                                                </circle>
+                                            <?php endforeach; ?>
+                                        <?php endforeach; ?>
+                                    </svg>
+                                    <div class="trend-legend">
+                                        <?php foreach ($trend_series as $series): ?>
+                                            <span class="trend-legend-item">
+                                                <span class="trend-legend-swatch" style="background: <?php echo htmlspecialchars($series['color']); ?>"></span>
+                                                <?php echo htmlspecialchars($series['name']); ?>
+                                            </span>
+                                        <?php endforeach; ?>
+                                    </div>
+                                <?php else: ?>
+                                    <p class="empty-state">No booking trend data found for this filter.</p>
+                                <?php endif; ?>
+                            </div>
+                        <?php else: ?>
+                            <div class="chart-grid">
+                                <?php foreach ($admin_chart as $entry): ?>
                                 <?php
                                 $height = (int) round(($entry['count'] / $max_count) * 100);
                                 $height = $entry['count'] > 0 ? max(8, $height) : 0;
@@ -554,8 +872,9 @@ $active = 'dashboard';
                                     <span class="chart-bar-value"><?php echo (int) $entry['count']; ?></span>
                                     <span class="chart-bar-label"><?php echo htmlspecialchars($label); ?></span>
                                 </div>
-                            <?php endforeach; ?>
-                        </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
 
                 <?php else: ?>
@@ -715,6 +1034,26 @@ $active = 'dashboard';
                     }
                 });
             });
+        })();
+        (function () {
+            var trendCluster = document.querySelector('select[name="trend_cluster"]');
+            var trendLab = document.querySelector('select[name="trend_lab"]');
+            if (!trendCluster || !trendLab) {
+                return;
+            }
+            function syncTrendLabs() {
+                var clusterId = trendCluster.value || '0';
+                var selectedOption = trendLab.options[trendLab.selectedIndex];
+                Array.prototype.forEach.call(trendLab.options, function (option) {
+                    var optionClusterId = option.getAttribute('data-cluster') || '0';
+                    option.hidden = clusterId !== '0' && optionClusterId !== '0' && optionClusterId !== clusterId;
+                });
+                if (selectedOption && selectedOption.hidden) {
+                    trendLab.value = '0';
+                }
+            }
+            trendCluster.addEventListener('change', syncTrendLabs);
+            syncTrendLabs();
         })();
     </script>
     <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
