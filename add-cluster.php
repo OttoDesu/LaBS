@@ -174,7 +174,7 @@ $active = 'booking';
                         </div>
                     </form>
                 </div>
-                <footer class="footer">Ac Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>
@@ -186,5 +186,4 @@ $active = 'booking';
     <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
 </body>
 </html>
-
 

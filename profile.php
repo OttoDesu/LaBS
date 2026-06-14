@@ -146,7 +146,7 @@ $active = 'profile';
                     </div>
                 </div>
 
-                <footer class="footer">Â© Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>

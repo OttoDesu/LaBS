@@ -1951,7 +1951,7 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                     </form>
                 </div>
 
-                <footer class="footer">Ac Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>

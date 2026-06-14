@@ -202,7 +202,7 @@ $booking_js_version = @filemtime(__DIR__ . '/assets/booking.js') ?: time();
                 <div class="lab-grid" id="lab-list"></div>
                 <div class="pagination" id="lab-pagination" hidden></div>
 
-                <footer class="footer">© Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>
@@ -216,5 +216,4 @@ $booking_js_version = @filemtime(__DIR__ . '/assets/booking.js') ?: time();
     <script src="assets/booking.js?v=<?php echo (int) $booking_js_version; ?>"></script>
 </body>
 </html>
-
 

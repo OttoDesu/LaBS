@@ -544,10 +544,13 @@ $active = 'dashboard';
                             <?php foreach ($admin_chart as $entry): ?>
                                 <?php
                                 $height = (int) round(($entry['count'] / $max_count) * 100);
+                                $height = $entry['count'] > 0 ? max(8, $height) : 0;
                                 $label = format_display_date($entry['date']);
                                 ?>
                                 <div class="chart-bar">
-                                    <div class="chart-bar-fill" style="height: <?php echo $height; ?>%"></div>
+                                    <div class="chart-bar-track">
+                                        <div class="chart-bar-fill" style="height: <?php echo $height; ?>%"></div>
+                                    </div>
                                     <span class="chart-bar-value"><?php echo (int) $entry['count']; ?></span>
                                     <span class="chart-bar-label"><?php echo htmlspecialchars($label); ?></span>
                                 </div>
@@ -658,7 +661,7 @@ $active = 'dashboard';
                     </div>
                 <?php endif; ?>
 
-                <footer class="footer">Â© Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>

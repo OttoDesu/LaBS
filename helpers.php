@@ -1360,6 +1360,71 @@ function mark_user_notifications_read($mysqli, int $user_id, ?int $notification_
     return $ok;
 }
 
+function build_labs_email_template(string $heading, string $display_name, string $intro, array $detail_rows = [], string $footer = '', string $accent_color = '#22c55e'): string {
+    $heading = trim($heading) !== '' ? trim($heading) : 'LaBS Notification';
+    $display_name = trim($display_name) !== '' ? trim($display_name) : 'User';
+    $intro = trim($intro);
+    $footer = trim($footer);
+
+    $rows_html = '';
+    foreach ($detail_rows as $row) {
+        $label = trim((string) ($row['label'] ?? ''));
+        $value = trim((string) ($row['value'] ?? ''));
+        if ($label === '' && $value === '') {
+            continue;
+        }
+        $rows_html .= '<tr>'
+            . '<td style="padding:12px 14px 12px 0;border-bottom:1px solid #374151;color:#b6bdc9;font-weight:700;white-space:nowrap;">' . htmlspecialchars($label, ENT_QUOTES, 'UTF-8') . '</td>'
+            . '<td style="padding:12px 0;border-bottom:1px solid #374151;color:#f8fafc;">' . nl2br(htmlspecialchars($value, ENT_QUOTES, 'UTF-8')) . '</td>'
+            . '</tr>';
+    }
+
+    $details_html = $rows_html !== ''
+        ? '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;margin:24px 0 24px;">' . $rows_html . '</table>'
+        : '';
+
+    return '<!doctype html><html><body style="margin:0;padding:0;background:#111827;font-family:Arial,Helvetica,sans-serif;color:#f8fafc;">'
+        . '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#111827;padding:24px 12px;"><tr><td align="center">'
+        . '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:560px;border:1px solid #374151;border-radius:10px;background:#0f141b;padding:0;">'
+        . '<tr><td style="padding:30px 30px 18px;">'
+        . '<div style="background:' . htmlspecialchars($accent_color, ENT_QUOTES, 'UTF-8') . ';color:#ffffff;text-align:center;font-size:26px;line-height:1.2;font-weight:800;letter-spacing:.3px;text-transform:uppercase;border-radius:7px;padding:22px 16px;">' . htmlspecialchars($heading, ENT_QUOTES, 'UTF-8') . '</div>'
+        . '</td></tr>'
+        . '<tr><td style="padding:22px 30px 30px;">'
+        . '<p style="margin:0 0 20px;font-size:18px;line-height:1.45;color:#f8fafc;">Hello <strong>' . htmlspecialchars($display_name, ENT_QUOTES, 'UTF-8') . '</strong>,</p>'
+        . ($intro !== '' ? '<p style="margin:0 0 8px;font-size:18px;line-height:1.45;color:#f8fafc;">' . nl2br(htmlspecialchars($intro, ENT_QUOTES, 'UTF-8')) . '</p>' : '')
+        . $details_html
+        . ($footer !== '' ? '<p style="margin:0;font-size:17px;line-height:1.45;color:#f8fafc;">' . nl2br(htmlspecialchars($footer, ENT_QUOTES, 'UTF-8')) . '</p>' : '')
+        . '</td></tr>'
+        . '</table>'
+        . '<p style="max-width:560px;margin:14px 0 0;color:#9ca3af;font-size:12px;line-height:1.4;">This is an automated notification from LaBS PPMKCP.</p>'
+        . '</td></tr></table>'
+        . '</body></html>';
+}
+
+function parse_notification_message_for_email(string $message): array {
+    $intro_lines = [];
+    $detail_rows = [];
+    foreach (preg_split('/\r\n|\r|\n/', trim($message)) as $line) {
+        $line = trim($line);
+        if ($line === '') {
+            continue;
+        }
+        if (preg_match('/^([^:]{2,40}):\s*(.+)$/', $line, $matches)) {
+            $detail_rows[] = [
+                'label' => trim($matches[1]),
+                'value' => trim($matches[2])
+            ];
+        } else {
+            $intro_lines[] = $line;
+        }
+    }
+
+    return [
+        'intro' => implode("\n", $intro_lines),
+        'details' => $detail_rows
+    ];
+}
+
 function send_system_notification_email(string $email, string $name, string $subject, string $message): bool {
     $email = trim($email);
     if ($email === '') {
@@ -1374,9 +1439,18 @@ function send_system_notification_email(string $email, string $name, string $sub
         '',
         'This is an automated notification from LaBS PPMKCP.'
     ]);
-    $html = '<p>Hello ' . htmlspecialchars($display_name, ENT_QUOTES, 'UTF-8') . ',</p>'
-        . '<p>' . nl2br(htmlspecialchars(trim($message), ENT_QUOTES, 'UTF-8')) . '</p>'
-        . '<p>This is an automated notification from LaBS PPMKCP.</p>';
+    $parsed_message = parse_notification_message_for_email($message);
+    $intro = $parsed_message['intro'] !== ''
+        ? $parsed_message['intro']
+        : 'Please review the notification details below.';
+    $html = build_labs_email_template(
+        $subject,
+        $display_name,
+        $intro,
+        $parsed_message['details'],
+        'If you need any further assistance, please contact the lab management team.',
+        stripos($subject, 'reject') !== false ? '#dc2626' : (stripos($subject, 'cancel') !== false ? '#64748b' : '#22c55e')
+    );
 
     return send_labs_email($email, $display_name, $subject, $payload, $html);
 }
@@ -1517,11 +1591,17 @@ function send_password_reset_code_email(string $email, string $name, string $cod
         'If you did not request this reset, you can ignore this email.'
     ];
     $message = implode("\r\n", $message_lines);
-    $html = '<p>Hello ' . htmlspecialchars($display_name, ENT_QUOTES, 'UTF-8') . ',</p>'
-        . '<p>We received a request to reset your LaBS account password.</p>'
-        . '<p><strong>Your verification code is: ' . htmlspecialchars($code, ENT_QUOTES, 'UTF-8') . '</strong></p>'
-        . '<p>This code expires in 15 minutes.</p>'
-        . '<p>If you did not request this reset, you can ignore this email.</p>';
+    $html = build_labs_email_template(
+        'Password Reset',
+        $display_name,
+        'We received a request to reset your LaBS account password.',
+        [
+            ['label' => 'Verification Code', 'value' => $code],
+            ['label' => 'Expires', 'value' => '15 minutes']
+        ],
+        'If you did not request this reset, you can ignore this email.',
+        '#2f6bff'
+    );
 
     return send_labs_email($email, $display_name, $subject, $message, $html);
 }

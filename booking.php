@@ -247,7 +247,7 @@ $active = 'booking';
                             </select>
                             <input type="text" id="filter-lab" placeholder="Filter by lab name">
                             <input type="text" id="filter-asset" placeholder="Filter by asset name">
-                            <button class="btn primary" type="button" id="filter-apply">Apply</button>
+                            <button class="btn primary" type="button" id="filter-apply">Filter</button>
                             <button class="btn ghost" type="button" id="filter-reset">Reset</button>
                         </div>
                     </div>
@@ -255,7 +255,7 @@ $active = 'booking';
                     <div class="cluster-grid" id="cluster-list"></div>
                 <?php endif; ?>
 
-                <footer class="footer">© Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>

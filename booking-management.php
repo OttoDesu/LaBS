@@ -21,6 +21,11 @@ $status_filter = $_GET['status'] ?? 'all';
 $cluster_filter = (int) ($_GET['cluster'] ?? 0);
 $booking_pk = get_booking_pk_column($mysqli);
 $page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
+$per_page_options = [10, 15, 25, 50];
+$per_page = isset($_GET['per_page']) ? (int) $_GET['per_page'] : 15;
+if (!in_array($per_page, $per_page_options, true)) {
+    $per_page = 15;
+}
 
 function ensure_booking_rejected_by_column(mysqli $mysqli): void {
     static $ensured = false;
@@ -349,11 +354,12 @@ if ($stmt) {
     $stmt->close();
 }
 
-$booking_pagination = paginate_items($bookings, $page, 15);
+$booking_pagination = paginate_items($bookings, $page, $per_page);
 $bookings = $booking_pagination['items'];
 $pagination_params = [
     'search' => $search,
-    'status' => $status_filter
+    'status' => $status_filter,
+    'per_page' => $per_page
 ];
 if ($is_super_admin) {
     $pagination_params['cluster'] = $cluster_filter;
@@ -501,10 +507,17 @@ $active = 'booking-management';
                             <option value="Rejected"<?php echo $status_filter === 'Rejected' ? ' selected' : ''; ?>>Rejected</option>
                             <option value="Cancelled"<?php echo $status_filter === 'Cancelled' ? ' selected' : ''; ?>>Cancelled</option>
                         </select>
+                        <select name="per_page" aria-label="Rows per page">
+                            <?php foreach ($per_page_options as $option): ?>
+                                <option value="<?php echo (int) $option; ?>"<?php echo $per_page === (int) $option ? ' selected' : ''; ?>>
+                                    <?php echo (int) $option; ?> per page
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
                         <input type="hidden" name="page" value="1">
                         <button class="btn primary" type="submit">Filter</button>
                     </form>
-                    <p class="table-meta">Showing <?php echo count($bookings); ?> of <?php echo (int) $booking_pagination['total_items']; ?> booking(s)</p>
+                    <p class="table-meta">Showing <?php echo count($bookings); ?> of <?php echo (int) $booking_pagination['total_items']; ?> booking(s) | <?php echo (int) $per_page; ?> per page</p>
                     <div class="table-wrapper">
                         <table>
                             <thead>
@@ -614,7 +627,7 @@ $active = 'booking-management';
                     <?php endif; ?>
                 </div>
 
-                <footer class="footer">Ac Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>

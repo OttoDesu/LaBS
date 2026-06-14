@@ -781,7 +781,7 @@ $app_js_version = @filemtime(__DIR__ . '/assets/app.js') ?: time();
                     <?php endif; ?>
                 </div>
 
-                <footer class="footer">Ac Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
+                <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
         </div>
     </div>
