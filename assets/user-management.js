@@ -1,6 +1,7 @@
 (function () {
     var modal = document.getElementById('user-modal');
     var addModal = document.getElementById('add-user-modal');
+    var importModal = document.getElementById('import-user-modal');
     var form = document.getElementById('user-form');
     var addForm = document.getElementById('add-user-form');
     var buttons = document.querySelectorAll('.edit-user');
@@ -34,6 +35,12 @@
     function closeAddModal() {
         if (addModal) {
             addModal.classList.remove('active');
+        }
+    }
+
+    function closeImportModal() {
+        if (importModal) {
+            importModal.classList.remove('active');
         }
     }
 
@@ -79,6 +86,12 @@
     document.querySelectorAll('[data-close="add-user-modal"]').forEach(function (closeButton) {
         closeButton.addEventListener('click', function () {
             closeAddModal();
+        });
+    });
+
+    document.querySelectorAll('[data-close="import-user-modal"]').forEach(function (closeButton) {
+        closeButton.addEventListener('click', function () {
+            closeImportModal();
         });
     });
 

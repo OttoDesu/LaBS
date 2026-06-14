@@ -24,6 +24,7 @@ if (!in_array($per_page, $per_page_options, true)) {
 $errors = [];
 $flash_info = get_flash('info');
 $show_add_modal = false;
+$show_import_modal = false;
 $add_name = '';
 $add_email = '';
 $add_phone = '';
@@ -104,6 +105,102 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $action = $_POST['action'] ?? '';
+
+    if (!$errors && $action === 'import_users_csv') {
+        if (!isset($_FILES['csv_file']) || !is_uploaded_file($_FILES['csv_file']['tmp_name'])) {
+            $errors[] = 'Please choose a CSV file to upload.';
+        }
+
+        $allowed_roles = $is_super_admin
+            ? ['public', 'uthm_student', 'uthm_staff', 'cluster_admin', 'lab_supervisor', 'super_admin', 'admin']
+            : ['public', 'uthm_student', 'uthm_staff'];
+        $imported = 0;
+        $skipped = 0;
+
+        if (!$errors) {
+            $handle = fopen($_FILES['csv_file']['tmp_name'], 'r');
+            if (!$handle) {
+                $errors[] = 'Unable to read uploaded CSV file.';
+            } else {
+                $headers = fgetcsv($handle);
+                $header_map = [];
+                if ($headers) {
+                    foreach ($headers as $index => $header) {
+                        $header_map[strtolower(trim((string) $header))] = $index;
+                    }
+                }
+                foreach (['name', 'email', 'ic_no'] as $required_header) {
+                    if (!array_key_exists($required_header, $header_map)) {
+                        $errors[] = 'CSV must include name, email, and ic_no columns.';
+                    }
+                }
+
+                if (!$errors) {
+                    while (($row = fgetcsv($handle)) !== false) {
+                        $name = trim((string) ($row[$header_map['name']] ?? ''));
+                        $email = trim((string) ($row[$header_map['email']] ?? ''));
+                        $phone = trim((string) ($row[$header_map['phone']] ?? ''));
+                        $ic_no = trim((string) ($row[$header_map['ic_no']] ?? ''));
+                        $user_type_input = trim((string) ($row[$header_map['user_type']] ?? 'public'));
+                        $cluster_id_input = (int) trim((string) ($row[$header_map['cluster_id']] ?? '0'));
+
+                        if (!$is_super_admin) {
+                            $cluster_id_input = (int) ($admin_cluster_id ?? 0);
+                        }
+                        if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL) || !in_array($user_type_input, $allowed_roles, true)) {
+                            $skipped++;
+                            continue;
+                        }
+                        if ($phone !== '' && !preg_match('/^\d{9,12}$/', $phone)) {
+                            $skipped++;
+                            continue;
+                        }
+                        if ($ic_no !== '' && !preg_match('/^\d{12}$/', $ic_no)) {
+                            $skipped++;
+                            continue;
+                        }
+                        if ($ic_no === '') {
+                            $skipped++;
+                            continue;
+                        }
+                        if (in_array($user_type_input, ['cluster_admin', 'uthm_student', 'uthm_staff'], true) && $cluster_id_input <= 0) {
+                            $skipped++;
+                            continue;
+                        }
+
+                        $cluster_id_value = $cluster_id_input > 0 ? $cluster_id_input : null;
+                        if ($user_type_input === 'super_admin' || $user_type_input === 'lab_supervisor') {
+                            $cluster_id_value = null;
+                        }
+
+                        $hashed = password_hash($ic_no, PASSWORD_DEFAULT);
+                        $stmt = $mysqli->prepare('
+                            INSERT IGNORE INTO users (name, email, phone, ic_no, password, user_type, cluster_id, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                        ');
+                        $stmt->bind_param('ssssssi', $name, $email, $phone, $ic_no, $hashed, $user_type_input, $cluster_id_value);
+                        $stmt->execute();
+                        if ($stmt->affected_rows > 0) {
+                            $imported++;
+                        } else {
+                            $skipped++;
+                        }
+                        $stmt->close();
+                    }
+                }
+                fclose($handle);
+            }
+        }
+
+        if ($errors) {
+            $show_import_modal = true;
+        } else {
+            set_flash('info', "CSV import completed. Imported {$imported} users, skipped {$skipped} rows.");
+            header('Location: user-management.php');
+            exit;
+        }
+    }
+
     $user_id = (int) ($_POST['user_id'] ?? 0);
     $name = trim($_POST['name'] ?? '');
     $email = trim($_POST['email'] ?? '');
@@ -114,17 +211,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user_type_input = $_POST['user_type'] ?? 'public';
     $cluster_id_input = (int) ($_POST['cluster_id'] ?? 0);
 
-    if ($name === '') {
-        $errors[] = 'Name is required.';
-    }
-    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $errors[] = 'Valid email is required.';
-    }
-    if ($phone !== '' && !preg_match('/^\d{9,12}$/', $phone)) {
-        $errors[] = 'Phone number must be 9 to 12 digits.';
-    }
-    if ($ic_no !== '' && !preg_match('/^\d{12}$/', $ic_no)) {
-        $errors[] = 'IC number must be 12 digits.';
+    if ($action !== 'import_users_csv') {
+        if ($name === '') {
+            $errors[] = 'Name is required.';
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $errors[] = 'Valid email is required.';
+        }
+        if ($phone !== '' && !preg_match('/^\d{9,12}$/', $phone)) {
+            $errors[] = 'Phone number must be 9 to 12 digits.';
+        }
+        if ($ic_no !== '' && !preg_match('/^\d{12}$/', $ic_no)) {
+            $errors[] = 'IC number must be 12 digits.';
+        }
     }
 
     if ($action === 'add_user') {
@@ -612,7 +711,7 @@ $active = 'user-management';
                         <div class="banner-links">
                             <a class="btn ghost" href="management-export.php?<?php echo htmlspecialchars(http_build_query($export_params)); ?>">Export Excel</a>
                             <?php if ($can_manage_users): ?>
-                                <button class="btn ghost" type="button">Upload CSV</button>
+                                <button class="btn ghost" type="button" data-modal="import-user-modal">Upload CSV</button>
                                 <button class="btn primary" type="button" data-modal="add-user-modal">Add User</button>
                             <?php endif; ?>
                         </div>
@@ -885,6 +984,29 @@ $active = 'user-management';
             </form>
         </div>
     </div>
+
+    <div class="modal<?php echo $show_import_modal ? ' active' : ''; ?>" id="import-user-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Upload Users CSV</h2>
+                <button class="icon-button" data-close="import-user-modal">x</button>
+            </div>
+            <form class="modal-body" method="POST" action="user-management.php" enctype="multipart/form-data">
+                <input type="hidden" name="action" value="import_users_csv">
+                <p class="muted-text">CSV headers: name,email,phone,ic_no,user_type,cluster_id</p>
+                <p class="muted-text">Each imported user's initial password will be their IC number.</p>
+                <?php if (!$is_super_admin): ?>
+                    <p class="muted-text">Cluster will be set to your admin cluster automatically.</p>
+                <?php endif; ?>
+                <label for="csv-file">CSV File</label>
+                <input type="file" name="csv_file" id="csv-file" accept=".csv,text/csv" required>
+                <div class="modal-footer">
+                    <button type="button" class="btn ghost" data-close="import-user-modal">Cancel</button>
+                    <button type="submit" class="btn primary">Upload CSV</button>
+                </div>
+            </form>
+        </div>
+    </div>
     <?php endif; ?>
 
     <script>
@@ -894,7 +1016,7 @@ $active = 'user-management';
     </script>
     <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
     <?php if ($can_manage_users): ?>
-        <script src="assets/user-management.js"></script>
+        <script src="assets/user-management.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/user-management.js') ?: time()); ?>"></script>
     <?php endif; ?>
 </body>
 </html>

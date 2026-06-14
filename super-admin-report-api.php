@@ -667,7 +667,7 @@ $table_rows = execute_prepared_query(
     "
     SELECT lb.{$booking_pk} AS booking_id,
            COALESCE(lr.title, CONCAT('Booking #', lb.{$booking_pk})) AS title,
-           COALESCE(lr.full_name, 'N/A') AS full_name,
+           COALESCE(lr.full_name, u.name, 'N/A') AS full_name,
            lb.user_id,
            c.cluster_name,
            l.lab_name,
@@ -679,6 +679,7 @@ $table_rows = execute_prepared_query(
            {$hours_sql} AS total_hours
     FROM lab_bookings lb
     LEFT JOIN lab_reservations lr ON lr.booking_id = lb.{$booking_pk}
+    LEFT JOIN users u ON u.id = lb.user_id
     JOIN labs l ON lb.lab_id = l.lab_id
     JOIN clusters c ON l.cluster_id = c.cluster_id
     {$where_clause}

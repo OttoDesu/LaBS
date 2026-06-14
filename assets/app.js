@@ -322,5 +322,18 @@
         });
     });
 
+    document.querySelectorAll('[data-close]').forEach(function (button) {
+        button.addEventListener('click', function () {
+            var targetId = button.getAttribute('data-close');
+            if (!targetId) {
+                return;
+            }
+            var modal = document.getElementById(targetId);
+            if (modal) {
+                modal.classList.remove('active');
+            }
+        });
+    });
+
     // Nav groups use <details> toggles.
 })();
