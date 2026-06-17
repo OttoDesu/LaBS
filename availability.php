@@ -134,12 +134,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $start_date = sprintf('%04d-%02d-01', $year, $month);
 $end_date = date('Y-m-t', strtotime($start_date));
 $calendar_query_start_date = $start_date;
-if (!$can_view_calendar_history) {
-    $today_date = date('Y-m-d');
-    if ($calendar_query_start_date < $today_date) {
-        $calendar_query_start_date = $today_date;
-    }
-}
 $booked_by_date = [];
 $booked_details_by_date = [];
 
