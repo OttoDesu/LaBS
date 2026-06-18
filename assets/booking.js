@@ -611,7 +611,7 @@
                 bookingSubmit.disabled = true;
             }
             closeBookedSlotsModal();
-            if (!isMaintenance && bookedSlotDetailsByDateHasItems(dateKey)) {
+            if (canViewCalendarHistory && !isMaintenance && bookedSlotDetailsByDateHasItems(dateKey)) {
                 openBookedSlotsModal(dateKey, bookedDetailsByDate[dateKey] || [], true);
             }
             if (bookingHint) {
@@ -657,35 +657,36 @@
             if ((cellIsPast && !canViewCalendarHistory) || cellIsLeadRestricted || cellIsMaintenance) {
                 cell.classList.add('disabled');
             }
-            cell.addEventListener('click', function () {
-                if (cellIsMaintenance || cellIsLeadRestricted || (cellIsPast && !canViewCalendarHistory)) {
-                    return;
-                }
-                var selectedKey = this.getAttribute('data-date');
-                if (cellIsPast) {
-                    closeBookedSlotsModal();
-                    renderSlots(selectedKey, true, false);
-                    bookingDateInput.value = '';
-                    bookingSlotsInput.value = bookingSlotsInput.id === 'booking-slots' ? '[]' : '';
-                    selectedSlots = [];
-                    syncSelectedDisplay();
-                    syncBookingButton();
-                    if (slotTitle) {
-                        slotTitle.textContent = 'Booked slots on ' + formatDateKey(selectedKey);
+            (function (cellElement, isPast, isLeadRestricted, isMaintenance) {
+                cellElement.addEventListener('click', function () {
+                    if (isMaintenance || isLeadRestricted || (isPast && !canViewCalendarHistory)) {
+                        return;
                     }
-                    if (bookingHint) {
-                        bookingHint.textContent = 'Past dates are view-only. You can review booked slots but cannot make a reservation.';
+                    var selectedKey = this.getAttribute('data-date');
+                    if (isPast) {
+                        closeBookedSlotsModal();
+                        renderSlots(selectedKey, true, false);
+                        bookingDateInput.value = '';
+                        bookingSlotsInput.value = bookingSlotsInput.id === 'booking-slots' ? '[]' : '';
+                        selectedSlots = [];
+                        updateSelectedDisplay();
+                        if (slotTitle) {
+                            slotTitle.textContent = 'Booked slots on ' + formatDateKey(selectedKey);
+                        }
+                        if (bookingHint) {
+                            bookingHint.textContent = 'Past dates are view-only. You can review booked slots but cannot make a reservation.';
+                        }
+                        if (bookedSlotDetailsByDateHasItems(selectedKey)) {
+                            openBookedSlotsModal(selectedKey, bookedDetailsByDate[selectedKey] || [], false);
+                        }
+                        return;
                     }
-                    if (bookedSlotDetailsByDateHasItems(selectedKey)) {
-                        openBookedSlotsModal(selectedKey, bookedDetailsByDate[selectedKey] || [], false);
-                    }
-                    return;
-                }
-                var cells = calendarGrid.querySelectorAll('.calendar-cell');
-                cells.forEach(function (item) { item.classList.remove('selected'); });
-                this.classList.add('selected');
-                selectDate(selectedKey);
-            });
+                    var cells = calendarGrid.querySelectorAll('.calendar-cell');
+                    cells.forEach(function (item) { item.classList.remove('selected'); });
+                    this.classList.add('selected');
+                    selectDate(selectedKey);
+                });
+            })(cell, cellIsPast, cellIsLeadRestricted, cellIsMaintenance);
 
             cell.setAttribute('data-date', dateKey);
             calendarGrid.appendChild(cell);
