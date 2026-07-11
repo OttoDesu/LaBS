@@ -21,7 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
-        $stmt = $mysqli->prepare("SELECT id, name, email, password, user_type, cluster_id FROM users WHERE email = ? AND user_type IN ('super_admin', 'cluster_admin', 'lab_supervisor', 'admin') LIMIT 1");
+        $stmt = $mysqli->prepare("SELECT id, name, email, password, user_type, cluster_id, is_active FROM users WHERE email = ? AND user_type IN ('super_admin', 'cluster_admin', 'lab_supervisor', 'admin') LIMIT 1");
         $stmt->bind_param('s', $email);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -32,6 +32,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Admin accounts must use name@uthm.edu.my. Lab Supervisor may use another valid email.';
         } elseif (!$user || !password_verify($password, $user['password'])) {
             $errors[] = 'Invalid admin email or password.';
+        } elseif ((int) ($user['is_active'] ?? 1) !== 1) {
+            $errors[] = 'This account is inactive. Please contact the administrator.';
         } else {
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['user_name'] = $user['name'];

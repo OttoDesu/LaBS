@@ -87,6 +87,22 @@ function get_lab_supervisor_lab_ids($mysqli, $user_id) {
     return $lab_ids;
 }
 
+function ensure_user_status_column($mysqli) {
+    static $ensured = false;
+    if ($ensured || !$mysqli) {
+        return;
+    }
+
+    $result = $mysqli->query("SHOW COLUMNS FROM users LIKE 'is_active'");
+    if ($result && $result->num_rows === 0) {
+        $mysqli->query("ALTER TABLE users ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1");
+    }
+    if ($result) {
+        $result->close();
+    }
+    $ensured = true;
+}
+
 function ensure_asset_transfer_tables($mysqli) {
     static $ensured = false;
     if ($ensured || !$mysqli) {
@@ -1292,10 +1308,42 @@ function send_via_phpmailer(array $config, string $to_email, string $to_name, st
     }
 }
 
+function is_placeholder_email_domain(string $email): bool {
+    $email = trim(strtolower($email));
+    if ($email === '' || strpos($email, '@') === false) {
+        return false;
+    }
+
+    $domain = substr(strrchr($email, '@'), 1);
+    if ($domain === false || $domain === '') {
+        return false;
+    }
+
+    $reserved_domains = [
+        'example.com',
+        'example.net',
+        'example.org',
+        'localhost'
+    ];
+    $has_suffix = static function (string $value, string $suffix): bool {
+        return $suffix === '' || substr($value, -strlen($suffix)) === $suffix;
+    };
+
+    return in_array($domain, $reserved_domains, true)
+        || $has_suffix($domain, '.example')
+        || $has_suffix($domain, '.invalid')
+        || $has_suffix($domain, '.localhost')
+        || $has_suffix($domain, '.test');
+}
+
 function send_labs_email(string $email, string $name, string $subject, string $plain_text, ?string $html = null): bool {
     $email = trim($email);
     if ($email === '' || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
         log_mail_debug('Email skipped: invalid recipient [' . $email . ']');
+        return false;
+    }
+    if (is_placeholder_email_domain($email)) {
+        log_mail_debug('Email skipped: placeholder recipient [' . $email . ']');
         return false;
     }
 

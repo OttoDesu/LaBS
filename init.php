@@ -9,6 +9,7 @@ if (isset($mysqli)) {
     ensure_class_booking_columns($mysqli);
     ensure_password_reset_table($mysqli);
     ensure_user_contact_columns($mysqli);
+    ensure_user_status_column($mysqli);
     ensure_user_notifications_table($mysqli);
     ensure_booking_holds_table($mysqli);
     cleanup_expired_booking_holds($mysqli);

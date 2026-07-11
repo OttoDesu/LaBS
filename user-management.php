@@ -9,7 +9,7 @@ $is_super_admin = is_super_admin($user_type);
 $is_cluster_admin = is_cluster_admin($user_type);
 $is_lab_supervisor = is_lab_supervisor($user_type);
 $can_manage_users = !$is_lab_supervisor;
-$show_action_column = !$is_super_admin && !$is_cluster_admin;
+$show_action_column = $can_manage_users;
 $session_user_id = (int) ($_SESSION['user_id'] ?? 0);
 
 $search = trim($_GET['search'] ?? '');
@@ -201,6 +201,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    if (!$errors && $action === 'toggle_user_status') {
+        if (!$is_super_admin) {
+            $errors[] = 'Only Admin can activate or deactivate admin accounts.';
+        }
+
+        $target_user_id = (int) ($_POST['user_id'] ?? 0);
+        if (!$errors && $target_user_id <= 0) {
+            $errors[] = 'Invalid user selected.';
+        }
+        if (!$errors && $target_user_id === $session_user_id) {
+            $errors[] = 'You cannot deactivate your own account.';
+        }
+
+        if (!$errors) {
+            $stmt = $mysqli->prepare("SELECT user_type, is_active FROM users WHERE id = ? LIMIT 1");
+            $stmt->bind_param('i', $target_user_id);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $target_user = $result->fetch_assoc();
+            $stmt->close();
+
+            if (!$target_user) {
+                $errors[] = 'Selected user was not found.';
+            } else {
+                $next_status = (int) $target_user['is_active'] === 1 ? 0 : 1;
+                $stmt = $mysqli->prepare('UPDATE users SET is_active = ?, updated_at = NOW() WHERE id = ?');
+                $stmt->bind_param('ii', $next_status, $target_user_id);
+                if ($stmt->execute()) {
+                    set_flash('info', $next_status === 1 ? 'User account activated.' : 'User account deactivated.');
+                    $stmt->close();
+                    $redirect_query = $_SERVER['QUERY_STRING'] ?? '';
+                    header('Location: user-management.php' . ($redirect_query !== '' ? '?' . $redirect_query : ''));
+                    exit;
+                }
+                $stmt->close();
+                $errors[] = 'Unable to update account status.';
+            }
+        }
+    }
+
     $user_id = (int) ($_POST['user_id'] ?? 0);
     $name = trim($_POST['name'] ?? '');
     $email = trim($_POST['email'] ?? '');
@@ -211,7 +251,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $user_type_input = $_POST['user_type'] ?? 'public';
     $cluster_id_input = (int) ($_POST['cluster_id'] ?? 0);
 
-    if ($action !== 'import_users_csv') {
+    if (!in_array($action, ['import_users_csv', 'toggle_user_status'], true)) {
         if ($name === '') {
             $errors[] = 'Name is required.';
         }
@@ -377,12 +417,15 @@ $search_like = '%' . $search . '%';
 if ($role_filter !== 'all' && !in_array($role_filter, ['public', 'uthm_student', 'uthm_staff', 'cluster_admin', 'lab_supervisor', 'super_admin', 'admin'], true)) {
     $role_filter = 'all';
 }
+if ($role_filter === 'admin') {
+    $role_filter = 'super_admin';
+}
 
 if ($role_filter === 'all') {
     if ($is_super_admin) {
         if ($cluster_filter > 0) {
             $stmt = $mysqli->prepare('
-                SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, c.cluster_name
+                SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
                 FROM users u
                 LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
                 WHERE (u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?) AND u.cluster_id = ?
@@ -391,7 +434,7 @@ if ($role_filter === 'all') {
             $stmt->bind_param('sssi', $search_like, $search_like, $search_like, $cluster_filter);
         } else {
             $stmt = $mysqli->prepare('
-                SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, c.cluster_name
+                SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
                 FROM users u
                 LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
                 WHERE u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?
@@ -404,7 +447,7 @@ if ($role_filter === 'all') {
             $placeholders = implode(',', array_fill(0, count($visible_cluster_ids), '?'));
             $types = str_repeat('i', count($visible_cluster_ids));
             $stmt = $mysqli->prepare("
-                SELECT DISTINCT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, c.cluster_name
+                SELECT DISTINCT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
                 FROM users u
                 LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
                 LEFT JOIN lab_supervisor_labs lsl ON lsl.user_id = u.id
@@ -434,30 +477,52 @@ if ($role_filter === 'all') {
 } else {
     if ($is_super_admin) {
         if ($cluster_filter > 0) {
-            $stmt = $mysqli->prepare('
-                SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, c.cluster_name
-                FROM users u
-                LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
-                WHERE (u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?) AND u.user_type = ? AND u.cluster_id = ?
-                ORDER BY u.id ASC
-            ');
-            $stmt->bind_param('ssssi', $search_like, $search_like, $search_like, $role_filter, $cluster_filter);
+            if ($role_filter === 'super_admin') {
+                $stmt = $mysqli->prepare("
+                    SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
+                    FROM users u
+                    LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
+                    WHERE (u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?) AND u.user_type IN ('super_admin', 'admin') AND u.cluster_id = ?
+                    ORDER BY u.id ASC
+                ");
+                $stmt->bind_param('sssi', $search_like, $search_like, $search_like, $cluster_filter);
+            } else {
+                $stmt = $mysqli->prepare('
+                    SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
+                    FROM users u
+                    LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
+                    WHERE (u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?) AND u.user_type = ? AND u.cluster_id = ?
+                    ORDER BY u.id ASC
+                ');
+                $stmt->bind_param('ssssi', $search_like, $search_like, $search_like, $role_filter, $cluster_filter);
+            }
         } else {
-            $stmt = $mysqli->prepare('
-                SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, c.cluster_name
-                FROM users u
-                LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
-                WHERE (u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?) AND u.user_type = ?
-                ORDER BY u.id ASC
-            ');
-            $stmt->bind_param('ssss', $search_like, $search_like, $search_like, $role_filter);
+            if ($role_filter === 'super_admin') {
+                $stmt = $mysqli->prepare("
+                    SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
+                    FROM users u
+                    LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
+                    WHERE (u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?) AND u.user_type IN ('super_admin', 'admin')
+                    ORDER BY u.id ASC
+                ");
+                $stmt->bind_param('sss', $search_like, $search_like, $search_like);
+            } else {
+                $stmt = $mysqli->prepare('
+                    SELECT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
+                    FROM users u
+                    LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
+                    WHERE (u.name LIKE ? OR u.email LIKE ? OR u.ic_no LIKE ?) AND u.user_type = ?
+                    ORDER BY u.id ASC
+                ');
+                $stmt->bind_param('ssss', $search_like, $search_like, $search_like, $role_filter);
+            }
         }
     } else {
         if ($visible_cluster_ids) {
             $placeholders = implode(',', array_fill(0, count($visible_cluster_ids), '?'));
             $types = str_repeat('i', count($visible_cluster_ids));
             $stmt = $mysqli->prepare("
-                SELECT DISTINCT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, c.cluster_name
+                SELECT DISTINCT u.id, u.name, u.email, u.phone, u.ic_no, u.user_type, u.cluster_id, u.is_active, c.cluster_name
                 FROM users u
                 LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
                 LEFT JOIN lab_supervisor_labs lsl ON lsl.user_id = u.id
@@ -495,6 +560,10 @@ while ($row = $result->fetch_assoc()) {
             && !$is_super_admin
             && in_array($row['user_type'], ['public', 'uthm_student', 'uthm_staff'], true)
             && (int) ($row['cluster_id'] ?? 0) === (int) $admin_cluster_id
+        );
+        $row['can_toggle_status'] = (
+            $is_super_admin
+            && (int) $row['id'] !== $session_user_id
         );
     $users[] = $row;
 }
@@ -537,7 +606,7 @@ if ($is_super_admin && $users) {
 
 if ($is_super_admin) {
     $directory_stmt = $mysqli->prepare("
-        SELECT u.id, u.name, u.email, u.phone, u.user_type, u.cluster_id, c.cluster_name
+        SELECT u.id, u.name, u.email, u.phone, u.user_type, u.cluster_id, u.is_active, c.cluster_name
         FROM users u
         LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
         WHERE u.user_type IN ('super_admin', 'cluster_admin', 'lab_supervisor', 'public')
@@ -548,7 +617,7 @@ if ($is_super_admin) {
     $placeholders = implode(',', array_fill(0, count($visible_cluster_ids), '?'));
     $types = str_repeat('i', count($visible_cluster_ids));
     $directory_stmt = $mysqli->prepare("
-        SELECT DISTINCT u.id, u.name, u.email, u.phone, u.user_type, u.cluster_id, c.cluster_name
+        SELECT DISTINCT u.id, u.name, u.email, u.phone, u.user_type, u.cluster_id, u.is_active, c.cluster_name
         FROM users u
         LEFT JOIN clusters c ON c.cluster_id = u.cluster_id
         LEFT JOIN lab_supervisor_labs lsl ON lsl.user_id = u.id
@@ -739,7 +808,6 @@ $active = 'user-management';
                             <?php endif; ?>
                             <?php if ($is_super_admin): ?>
                                 <option value="super_admin"<?php echo $role_filter === 'super_admin' ? ' selected' : ''; ?>>Admin</option>
-                                <option value="admin"<?php echo $role_filter === 'admin' ? ' selected' : ''; ?>>Admin (Legacy)</option>
                             <?php endif; ?>
                         </select>
                         <select name="per_page" aria-label="Users per page">
@@ -767,6 +835,7 @@ $active = 'user-management';
                                     <th>Cluster</th>
                                     <th>Email</th>
                                     <th>Phone No</th>
+                                    <th>Status</th>
                                     <?php if ($show_action_column): ?>
                                         <th>Action</th>
                                     <?php endif; ?>
@@ -781,9 +850,25 @@ $active = 'user-management';
                                         <td><?php echo htmlspecialchars($user['cluster_name'] ?? '-'); ?></td>
                                         <td><?php echo htmlspecialchars($user['email']); ?></td>
                                         <td><?php echo htmlspecialchars($user['phone'] ?? '-'); ?></td>
+                                        <td>
+                                            <?php if ((int) ($user['is_active'] ?? 1) === 1): ?>
+                                                <span class="badge badge-success">Active</span>
+                                            <?php else: ?>
+                                                <span class="badge badge-danger">Inactive</span>
+                                            <?php endif; ?>
+                                        </td>
                                         <?php if ($show_action_column): ?>
                                             <td>
-                                                <?php if (!empty($user['can_edit'])): ?>
+                                                <?php if (!empty($user['can_toggle_status'])): ?>
+                                                    <?php $is_user_active = (int) ($user['is_active'] ?? 1) === 1; ?>
+                                                    <form method="POST" class="inline-action-form" onsubmit="return confirm('<?php echo $is_user_active ? 'Deactivate this admin account?' : 'Activate this admin account?'; ?>');">
+                                                        <input type="hidden" name="action" value="toggle_user_status">
+                                                        <input type="hidden" name="user_id" value="<?php echo (int) $user['id']; ?>">
+                                                        <button class="btn small <?php echo $is_user_active ? 'danger' : 'primary'; ?>" type="submit">
+                                                            <?php echo $is_user_active ? 'Deactivate' : 'Activate'; ?>
+                                                        </button>
+                                                    </form>
+                                                <?php elseif (!empty($user['can_edit'])): ?>
                                                     <button
                                                         class="btn ghost edit-user"
                                                         type="button"
@@ -807,7 +892,7 @@ $active = 'user-management';
                                 <?php endforeach; ?>
                                 <?php if (!$users): ?>
                                     <tr>
-                                        <td colspan="<?php echo $show_action_column ? '7' : '6'; ?>">No users found.</td>
+                                        <td colspan="<?php echo $show_action_column ? '8' : '7'; ?>">No users found.</td>
                                     </tr>
                                 <?php endif; ?>
                             </tbody>

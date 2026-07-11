@@ -1823,38 +1823,44 @@ if (!empty($form_values['group_midsem_start_date']) && preg_match('/^\d{4}-\d{2}
                                 </div>
                             </div>
                             <div class="form-row checkbox-row">
-                                <label class="checkbox">
-                                    <input type="checkbox" name="include_equipment" <?php echo $form_values['include_equipment'] ? 'checked' : ''; ?>>
-                                    <span>Include equipment / tools</span>
-                                </label>
-                                <label class="checkbox">
-                                    <input type="checkbox" name="include_chemicals" <?php echo $form_values['include_chemicals'] ? 'checked' : ''; ?>>
-                                    <span>Include chemicals / consumables</span>
-                                </label>
-                                <label class="checkbox">
-                                    <input type="checkbox" name="is_student" <?php echo $form_values['is_student'] ? 'checked' : ''; ?>>
-                                    <span>Student (check if you are a student)</span>
-                                </label>
-                            </div>
-                            <div id="equipment-section" class="inline-card">
-                                <div class="inline-card-header">
-                                    <div>
-                                        <h4>Equipment / tools to be used</h4>
-                                        <p class="muted-text">Add the tools needed for this booking.</p>
+                                <div class="requirement-option">
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="include_equipment" <?php echo $form_values['include_equipment'] ? 'checked' : ''; ?>>
+                                        <span>Include equipment / tools</span>
+                                    </label>
+                                    <div id="equipment-section" class="inline-card">
+                                        <div class="inline-card-header">
+                                            <div>
+                                                <h4>Equipment / tools to be used</h4>
+                                                <p class="muted-text">Add the tools needed for this booking.</p>
+                                            </div>
+                                            <button class="btn ghost small" type="button" id="add-equipment">+ Add tool</button>
+                                        </div>
+                                        <div class="inline-card-body" id="equipment-list"></div>
                                     </div>
-                                    <button class="btn ghost small" type="button" id="add-equipment">+ Add tool</button>
                                 </div>
-                                <div class="inline-card-body" id="equipment-list"></div>
-                            </div>
-                            <div id="chemicals-section" class="inline-card">
-                                <div class="inline-card-header">
-                                    <div>
-                                        <h4>Chemicals / consumables</h4>
-                                        <p class="muted-text">List any chemicals or consumables required.</p>
+                                <div class="requirement-option">
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="include_chemicals" <?php echo $form_values['include_chemicals'] ? 'checked' : ''; ?>>
+                                        <span>Include chemicals / consumables</span>
+                                    </label>
+                                    <div id="chemicals-section" class="inline-card">
+                                        <div class="inline-card-header">
+                                            <div>
+                                                <h4>Chemicals / consumables</h4>
+                                                <p class="muted-text">List any chemicals or consumables required.</p>
+                                            </div>
+                                            <button class="btn ghost small" type="button" id="add-chemical">+ Add chemical</button>
+                                        </div>
+                                        <div class="inline-card-body" id="chemicals-list"></div>
                                     </div>
-                                    <button class="btn ghost small" type="button" id="add-chemical">+ Add chemical</button>
                                 </div>
-                                <div class="inline-card-body" id="chemicals-list"></div>
+                                <div class="requirement-option">
+                                    <label class="checkbox">
+                                        <input type="checkbox" name="is_student" <?php echo $form_values['is_student'] ? 'checked' : ''; ?>>
+                                        <span>Student (check if you are a student)</span>
+                                    </label>
+                                </div>
                             </div>
                             <div class="form-row">
                                 <div>

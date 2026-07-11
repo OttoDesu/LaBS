@@ -31,11 +31,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errors) {
         if ($user_type === 'uthm') {
-            $stmt = $mysqli->prepare("SELECT id, name, email, password, user_type, cluster_id FROM users 
+            $stmt = $mysqli->prepare("SELECT id, name, email, password, user_type, cluster_id, is_active FROM users 
             WHERE email = ? AND user_type IN ('uthm_staff', 'uthm_student', 'super_admin', 'cluster_admin', 'lab_supervisor', 'admin') LIMIT 1");
             $stmt->bind_param('s', $email);
         } else {
-            $stmt = $mysqli->prepare('SELECT id, name, email, password, user_type, cluster_id FROM users 
+            $stmt = $mysqli->prepare('SELECT id, name, email, password, user_type, cluster_id, is_active FROM users 
             WHERE email = ? AND user_type = ? LIMIT 1');
             $stmt->bind_param('ss', $email, $user_type);
         }
@@ -52,6 +52,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$user || !password_verify($password, $user['password'])) {
             $errors[] = 'Invalid email or password.';
+        } elseif ((int) ($user['is_active'] ?? 1) !== 1) {
+            $errors[] = 'This account is inactive. Please contact the administrator.';
         } else {
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['user_name'] = $user['name'];

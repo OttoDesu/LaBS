@@ -23,7 +23,7 @@ $booking_pk = get_booking_pk_column($mysqli);
 if ($is_super_admin) {
     $stmt = $mysqli->prepare('
         SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
-               l.lab_name, u.name AS user_name, u.email AS user_email,
+               l.lab_name, u.name AS user_name, u.email AS user_email, u.student_staff_id, u.department,
                lr.reservation_id, lr.title, lr.activity_details, lr.full_name, lr.ic_no, lr.email AS reservation_email,
                lr.phone, lr.affiliation_type, lr.cluster_id, lr.public_agency_type, lr.public_sector, lr.government_info,
                lr.include_equipment, lr.include_chemicals, lr.start_time, lr.end_time, lr.is_student,
@@ -44,7 +44,7 @@ if ($is_super_admin) {
         $types = str_repeat('i', count($lab_scope_ids));
         $stmt = $mysqli->prepare('
             SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
-                   l.lab_name, u.name AS user_name, u.email AS user_email,
+                   l.lab_name, u.name AS user_name, u.email AS user_email, u.student_staff_id, u.department,
                    lr.reservation_id, lr.title, lr.activity_details, lr.full_name, lr.ic_no, lr.email AS reservation_email,
                    lr.phone, lr.affiliation_type, lr.cluster_id, lr.public_agency_type, lr.public_sector, lr.government_info,
                    lr.include_equipment, lr.include_chemicals, lr.start_time, lr.end_time, lr.is_student,
@@ -65,7 +65,7 @@ if ($is_super_admin) {
 } else {
     $stmt = $mysqli->prepare('
         SELECT lb.' . $booking_pk . ' AS booking_id, lb.booking_date, lb.time_slot, lb.status, lb.rejection_reason, lb.cancellation_reason,
-               l.lab_name, u.name AS user_name, u.email AS user_email,
+               l.lab_name, u.name AS user_name, u.email AS user_email, u.student_staff_id, u.department,
                lr.reservation_id, lr.title, lr.activity_details, lr.full_name, lr.ic_no, lr.email AS reservation_email,
                lr.phone, lr.affiliation_type, lr.cluster_id, lr.public_agency_type, lr.public_sector, lr.government_info,
                lr.include_equipment, lr.include_chemicals, lr.start_time, lr.end_time, lr.is_student,
@@ -132,6 +132,37 @@ $affiliation_label = ($booking['affiliation_type'] ?? '') === 'uthm' ? 'UTHM' : 
 $public_type_label = ($booking['public_agency_type'] ?? '') === 'government' ? 'Government agency' : 'Private agency';
 $calendar_payload = build_booking_calendar_payload($booking);
 $google_calendar_url = $calendar_payload ? build_google_calendar_url($calendar_payload) : '';
+
+function booking_detail_value($value): string {
+    $value = trim((string) ($value ?? ''));
+    return $value !== '' ? $value : '-';
+}
+
+function booking_detail_time($value): string {
+    $value = trim((string) ($value ?? ''));
+    return $value !== '' ? substr($value, 0, 5) : '-';
+}
+
+function booking_detail_day_name($date): string {
+    $timestamp = strtotime((string) $date);
+    if (!$timestamp) {
+        return '-';
+    }
+    $days = ['Sunday' => 'Ahad', 'Monday' => 'Isnin', 'Tuesday' => 'Selasa', 'Wednesday' => 'Rabu', 'Thursday' => 'Khamis', 'Friday' => 'Jumaat', 'Saturday' => 'Sabtu'];
+    return $days[date('l', $timestamp)] ?? date('l', $timestamp);
+}
+
+$applicant_name = booking_detail_value($booking['full_name'] ?? $booking['user_name'] ?? '');
+$applicant_email = booking_detail_value($booking['reservation_email'] ?? $booking['user_email'] ?? '');
+$applicant_id = booking_detail_value($booking['student_staff_id'] ?? $booking['ic_no'] ?? '');
+$faculty = booking_detail_value($booking['department'] ?? $booking['cluster_name'] ?? '');
+$activity = booking_detail_value($booking['activity_details'] ?? $booking['title'] ?? '');
+$start_time = booking_detail_time($booking['start_time'] ?? '');
+$end_time = booking_detail_time($booking['end_time'] ?? '');
+$status_label = get_booking_status_label($booking['status'] ?? '');
+$cluster_or_agency = ($booking['affiliation_type'] ?? '') === 'uthm'
+    ? booking_detail_value($booking['cluster_name'] ?? '')
+    : $public_type_label;
 
 $user_payload = [
     'name' => $_SESSION['user_name'] ?? 'User',
@@ -225,148 +256,134 @@ $active = 'booking-management';
                     <div class="breadcrumb">Home / Booking Management / Details</div>
                 </div>
 
-                <div class="card banner">
-                    <div>
-                        <p class="badge">Booking #<?php echo (int) $booking['booking_id']; ?></p>
-                        <h2><?php echo htmlspecialchars($booking['lab_name']); ?></h2>
-                        <p><?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?> | <?php echo htmlspecialchars($booking['start_time'] ?? '-') . ' - ' . htmlspecialchars($booking['end_time'] ?? '-'); ?></p>
-                    </div>
-                    <div class="banner-links">
-                        <a class="btn ghost" href="booking-management.php">Back to Booking Management</a>
-                        <?php if ($google_calendar_url !== ''): ?>
-                            <a class="btn ghost" href="<?php echo htmlspecialchars($google_calendar_url); ?>" target="_blank" rel="noopener">Add to Google Calendar</a>
-                            <a class="btn ghost" href="export-calendar.php?booking_id=<?php echo (int) $booking['booking_id']; ?>">Download .ics</a>
-                        <?php endif; ?>
-                        <?php if (!empty($booking['document_path'])): ?>
-                            <button class="btn primary" type="button" data-modal="pdf-modal">View Document</button>
-                        <?php endif; ?>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="profile-info-grid">
-                        <div class="info-item">
-                            <span class="info-label">Status</span>
-                            <span class="info-value"><?php echo htmlspecialchars(get_booking_status_label($booking['status'] ?? '')); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Applicant</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['full_name'] ?? $booking['user_name']); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Email</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['reservation_email'] ?? $booking['user_email']); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Phone</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['phone'] ?? '-'); ?></span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="profile-info-grid">
-                        <div class="info-item">
-                            <span class="info-label">Title</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['title'] ?? '-'); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">IC</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['ic_no'] ?? '-'); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Affiliation</span>
-                            <span class="info-value"><?php echo htmlspecialchars($affiliation_label); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Cluster / Agency</span>
-                            <span class="info-value">
-                                <?php if (($booking['affiliation_type'] ?? '') === 'uthm'): ?>
-                                    <?php echo htmlspecialchars($booking['cluster_name'] ?? '-'); ?>
-                                <?php else: ?>
-                                    <?php echo htmlspecialchars($public_type_label); ?>
-                                <?php endif; ?>
-                            </span>
-                        </div>
-                    </div>
-                    <div class="info-row info-row-column">
-                        <span class="info-label">Activity details</span>
-                        <span class="info-value"><?php echo htmlspecialchars($booking['activity_details'] ?? '-'); ?></span>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="profile-info-grid">
-                        <div class="info-item">
-                            <span class="info-label">Student</span>
-                            <span class="info-value"><?php echo ($booking['is_student'] ?? 0) ? 'Yes' : 'No'; ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Supervisor name</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['supervisor_name'] ?? '-'); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Supervisor matric</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['supervisor_matric'] ?? '-'); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Supervisor phone</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['supervisor_phone'] ?? '-'); ?></span>
-                        </div>
-                        <div class="info-item">
-                            <span class="info-label">Supervisor email</span>
-                            <span class="info-value"><?php echo htmlspecialchars($booking['supervisor_email'] ?? '-'); ?></span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="banner">
+                <section class="booking-detail-receipt">
+                    <div class="booking-detail-toolbar">
                         <div>
-                            <h3>Equipment / tools</h3>
-                            <p class="muted-text">Items requested in the booking.</p>
+                            <p class="badge">Booking #<?php echo (int) $booking['booking_id']; ?></p>
+                            <h2><?php echo htmlspecialchars($booking['lab_name']); ?></h2>
+                            <p><?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?> | <?php echo htmlspecialchars($start_time . ' - ' . $end_time); ?></p>
+                        </div>
+                        <div class="booking-detail-actions">
+                            <a class="btn ghost" href="booking-management.php">Back</a>
+                            <button class="btn ghost booking-detail-view-toggle is-active" type="button" data-booking-view="form">View Form</button>
+                            <button class="btn primary booking-detail-view-toggle" type="button" data-booking-view="pdf">View PDF Form</button>
+                            <button class="btn danger" type="button" id="booking-detail-print">Print / Save PDF</button>
+                            <?php if ($google_calendar_url !== ''): ?>
+                                <a class="btn ghost" href="<?php echo htmlspecialchars($google_calendar_url); ?>" target="_blank" rel="noopener">Add to Google Calendar</a>
+                                <a class="btn ghost" href="export-calendar.php?booking_id=<?php echo (int) $booking['booking_id']; ?>">Download .ics</a>
+                            <?php endif; ?>
+                            <?php if (!empty($booking['document_path'])): ?>
+                                <button class="btn primary" type="button" data-modal="pdf-modal">View Document</button>
+                            <?php endif; ?>
                         </div>
                     </div>
-                    <?php if ($equipment_items): ?>
-                        <div class="lab-list">
-                            <?php foreach ($equipment_items as $item): ?>
-                                <div class="lab-item">
-                                    <div class="lab-title"><?php echo htmlspecialchars($item['equipment_name']); ?></div>
-                                    <div class="lab-meta">
-                                        <span>Quantity: <?php echo (int) $item['quantity']; ?></span>
-                                        <span><?php echo $item['notes'] ? htmlspecialchars($item['notes']) : 'No notes'; ?></span>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php else: ?>
-                        <p class="muted-text">No equipment requested.</p>
-                    <?php endif; ?>
-                </div>
 
-                <div class="card">
-                    <div class="banner">
-                        <div>
-                            <h3>Chemicals / consumables</h3>
-                            <p class="muted-text">Items requested in the booking.</p>
+                    <div class="booking-detail-pane is-active" id="booking-detail-form-view">
+                        <div class="booking-detail-status-line">
+                            <span>Status Tempahan:</span>
+                            <span class="status <?php echo htmlspecialchars($booking['status'] ?? ''); ?>"><?php echo htmlspecialchars($status_label); ?></span>
+                        </div>
+
+                        <div class="booking-detail-section">
+                            <h3>Maklumat Pemohon</h3>
+                            <div class="booking-detail-table-wrap">
+                                <table class="booking-detail-table">
+                                    <thead><tr><th>Nama Pemohon</th><th>No. Telefon</th><th>Email</th><th>Fakulti / Organisasi</th></tr></thead>
+                                    <tbody><tr><td><?php echo htmlspecialchars($applicant_name); ?></td><td><?php echo htmlspecialchars(booking_detail_value($booking['phone'] ?? '')); ?></td><td><?php echo htmlspecialchars($applicant_email); ?></td><td><?php echo htmlspecialchars($faculty); ?></td></tr></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="booking-detail-section">
+                            <h3>Maklumat Tempahan</h3>
+                            <div class="booking-detail-table-wrap">
+                                <table class="booking-detail-table">
+                                    <thead><tr><th>Tarikh</th><th>Hari</th><th>Masa Mula</th><th>Masa Tamat</th><th>Tajuk</th><th>Lampiran</th></tr></thead>
+                                    <tbody><tr><td><?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?></td><td><?php echo htmlspecialchars(booking_detail_day_name($booking['booking_date'])); ?></td><td><?php echo htmlspecialchars($start_time); ?></td><td><?php echo htmlspecialchars($end_time); ?></td><td><?php echo htmlspecialchars(booking_detail_value($booking['title'] ?? '')); ?></td><td><?php if (!empty($booking['document_path'])): ?><button class="booking-detail-document" type="button" data-modal="pdf-modal">View PDF</button><?php else: ?>-<?php endif; ?></td></tr></tbody>
+                                </table>
+                            </div>
+                            <div class="booking-detail-note">
+                                <span>Deskripsi</span>
+                                <p><?php echo nl2br(htmlspecialchars($activity)); ?></p>
+                            </div>
+                            <div class="booking-detail-meta-grid">
+                                <div><span>IC / ID</span><strong><?php echo htmlspecialchars($applicant_id); ?></strong></div>
+                                <div><span>Affiliation</span><strong><?php echo htmlspecialchars($affiliation_label); ?></strong></div>
+                                <div><span>Cluster / Agency</span><strong><?php echo htmlspecialchars($cluster_or_agency); ?></strong></div>
+                                <div><span>Student</span><strong><?php echo ($booking['is_student'] ?? 0) ? 'Yes' : 'No'; ?></strong></div>
+                            </div>
+                        </div>
+
+                        <div class="booking-detail-section">
+                            <h3>Alatan</h3>
+                            <div class="booking-detail-table-wrap">
+                                <table class="booking-detail-table">
+                                    <thead><tr><th>Nama Alat</th><th>Jumlah Alat</th><th>Deskripsi</th></tr></thead>
+                                    <tbody>
+                                        <?php if ($equipment_items): ?>
+                                            <?php foreach ($equipment_items as $item): ?>
+                                                <tr><td><?php echo htmlspecialchars($item['equipment_name']); ?></td><td><?php echo (int) $item['quantity']; ?></td><td><?php echo htmlspecialchars(booking_detail_value($item['notes'] ?? '')); ?></td></tr>
+                                            <?php endforeach; ?>
+                                        <?php else: ?>
+                                            <tr><td class="booking-detail-empty" colspan="3">Tiada Data Alatan</td></tr>
+                                        <?php endif; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="booking-detail-section">
+                            <h3>Bahan Kimia</h3>
+                            <div class="booking-detail-table-wrap">
+                                <table class="booking-detail-table">
+                                    <thead><tr><th>Nama Bahan Kimia</th><th>Jumlah Bahan Kimia</th><th>PPE</th></tr></thead>
+                                    <tbody>
+                                        <?php if ($chemical_items): ?>
+                                            <?php foreach ($chemical_items as $item): ?>
+                                                <tr><td><?php echo htmlspecialchars($item['chemical_name']); ?></td><td><?php echo (int) $item['quantity']; ?></td><td><?php echo (int) $item['ppe_required'] ? 'PPE required' : 'PPE not required'; ?></td></tr>
+                                            <?php endforeach; ?>
+                                        <?php else: ?>
+                                            <tr><td class="booking-detail-empty" colspan="3">Tiada Data Bahan Kimia</td></tr>
+                                        <?php endif; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="booking-detail-section">
+                            <h3>Maklumat Supervisor</h3>
+                            <div class="booking-detail-table-wrap">
+                                <table class="booking-detail-table">
+                                    <thead><tr><th>Nama Supervisor</th><th>No. Matrik</th><th>No. Telefon</th><th>Email</th></tr></thead>
+                                    <tbody>
+                                        <?php if (!empty($booking['is_student'])): ?>
+                                            <tr><td><?php echo htmlspecialchars(booking_detail_value($booking['supervisor_name'] ?? '')); ?></td><td><?php echo htmlspecialchars(booking_detail_value($booking['supervisor_matric'] ?? '')); ?></td><td><?php echo htmlspecialchars(booking_detail_value($booking['supervisor_phone'] ?? '')); ?></td><td><?php echo htmlspecialchars(booking_detail_value($booking['supervisor_email'] ?? '')); ?></td></tr>
+                                        <?php else: ?>
+                                            <tr><td class="booking-detail-empty" colspan="4">Tiada Data Supervisor</td></tr>
+                                        <?php endif; ?>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
-                    <?php if ($chemical_items): ?>
-                        <div class="lab-list">
-                            <?php foreach ($chemical_items as $item): ?>
-                                <div class="lab-item">
-                                    <div class="lab-title"><?php echo htmlspecialchars($item['chemical_name']); ?></div>
-                                    <div class="lab-meta">
-                                        <span>Quantity: <?php echo (int) $item['quantity']; ?></span>
-                                        <span><?php echo (int) $item['ppe_required'] ? 'PPE required' : 'PPE not required'; ?></span>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
+
+                    <div class="booking-detail-pane" id="booking-detail-pdf-view">
+                        <div class="booking-official-sheet">
+                            <div class="booking-official-top">
+                                <div class="booking-official-logo"><img src="img/labs_logo.png" alt="UTHM"></div>
+                                <div class="booking-official-agency">PEJABAT PENGURUSAN MAKMAL<br>KAMPUS CAWANGAN PAGOH<br>(PPMKCP)</div>
+                            </div>
+                            <div class="booking-official-title">BORANG PERMOHONAN PENGGUNAAN MAKMAL</div>
+                            <div class="booking-official-notice"><strong>PERHATIAN:</strong><div>Permohonan perlu dibuat sekurang-kurangnya TIGA(3) hari sebelum tarikh penggunaan makmal.</div><div>Penyelia makmal perlu dimaklumkan setiap kali apabila hendak menggunakan makmal.</div><div>Pengguna hendaklah mematuhi peraturan keselamatan makmal dan arahan pengurusan makmal.</div></div>
+
+                            <div class="booking-official-section"><div class="booking-official-section-title">1. MAKLUMAT PEMOHON</div><table class="booking-official-table"><thead><tr><th style="width:42px">BIL</th><th>Nama</th><th>Fakulti/PPj/Organisasi</th><th>No. Matrik/KP</th><th>No. Telefon</th></tr></thead><tbody><tr><td>1</td><td><?php echo htmlspecialchars($applicant_name); ?></td><td><?php echo htmlspecialchars($faculty); ?></td><td><?php echo htmlspecialchars($applicant_id); ?></td><td><?php echo htmlspecialchars(booking_detail_value($booking['phone'] ?? '')); ?></td></tr></tbody></table></div>
+                            <div class="booking-official-section"><div class="booking-official-section-title">2. MAKLUMAT MAKMAL</div><table class="booking-official-table"><tbody><tr><th>Nama Makmal</th><td><?php echo htmlspecialchars($booking['lab_name']); ?></td></tr><tr><th>Kluster</th><td><?php echo htmlspecialchars(booking_detail_value($booking['cluster_name'] ?? '')); ?></td></tr></tbody></table></div>
+                            <div class="booking-official-section"><div class="booking-official-section-title">3. MAKLUMAT TEMPAHAN</div><table class="booking-official-table"><thead><tr><th>Tarikh</th><th>Hari</th><th>Masa Mula</th><th>Masa Tamat</th><th>Tujuan / Deskripsi</th></tr></thead><tbody><tr><td><?php echo htmlspecialchars(format_display_date($booking['booking_date'])); ?></td><td><?php echo htmlspecialchars(booking_detail_day_name($booking['booking_date'])); ?></td><td><?php echo htmlspecialchars($start_time); ?></td><td><?php echo htmlspecialchars($end_time); ?></td><td><?php echo htmlspecialchars($activity); ?></td></tr></tbody></table></div>
+                            <div class="booking-official-section"><div class="booking-official-section-title">4. ALATAN / BAHAN KIMIA</div><table class="booking-official-table"><thead><tr><th>Jenis</th><th>Nama Item</th><th>Kuantiti</th><th>Catatan / PPE</th></tr></thead><tbody><?php if ($equipment_items || $chemical_items): ?><?php foreach ($equipment_items as $item): ?><tr><td>Alatan</td><td><?php echo htmlspecialchars($item['equipment_name']); ?></td><td><?php echo (int) $item['quantity']; ?></td><td><?php echo htmlspecialchars(booking_detail_value($item['notes'] ?? '')); ?></td></tr><?php endforeach; ?><?php foreach ($chemical_items as $item): ?><tr><td>Bahan Kimia</td><td><?php echo htmlspecialchars($item['chemical_name']); ?></td><td><?php echo (int) $item['quantity']; ?></td><td><?php echo (int) $item['ppe_required'] ? 'PPE required' : 'PPE not required'; ?></td></tr><?php endforeach; ?><?php else: ?><tr><td colspan="4">Tiada alatan atau bahan kimia dimohon.</td></tr><?php endif; ?></tbody></table></div>
+                            <div class="booking-official-section"><div class="booking-official-section-title">5. MAKLUMAT SUPERVISOR</div><table class="booking-official-table"><thead><tr><th>Nama Supervisor</th><th>No. Matrik</th><th>No. Telefon</th><th>Email</th></tr></thead><tbody><tr><td><?php echo htmlspecialchars(!empty($booking['is_student']) ? booking_detail_value($booking['supervisor_name'] ?? '') : '-'); ?></td><td><?php echo htmlspecialchars(!empty($booking['is_student']) ? booking_detail_value($booking['supervisor_matric'] ?? '') : '-'); ?></td><td><?php echo htmlspecialchars(!empty($booking['is_student']) ? booking_detail_value($booking['supervisor_phone'] ?? '') : '-'); ?></td><td><?php echo htmlspecialchars(!empty($booking['is_student']) ? booking_detail_value($booking['supervisor_email'] ?? '') : '-'); ?></td></tr></tbody></table></div>
                         </div>
-                    <?php else: ?>
-                        <p class="muted-text">No chemicals requested.</p>
-                    <?php endif; ?>
-                </div>
+                    </div>
+                </section>
 
                 <footer class="footer">&copy; Copyright 2025 LaBS PPMKCP. All Rights Reserved.</footer>
             </section>
@@ -408,6 +425,33 @@ $active = 'booking-management';
                 }
             });
         });
+        (function () {
+            var formView = document.getElementById('booking-detail-form-view');
+            var pdfView = document.getElementById('booking-detail-pdf-view');
+            var toggles = document.querySelectorAll('[data-booking-view]');
+            if (!formView || !pdfView || !toggles.length) {
+                return;
+            }
+            toggles.forEach(function (button) {
+                button.addEventListener('click', function () {
+                    var view = button.getAttribute('data-booking-view');
+                    var showPdf = view === 'pdf';
+                    formView.classList.toggle('is-active', !showPdf);
+                    pdfView.classList.toggle('is-active', showPdf);
+                    toggles.forEach(function (toggle) {
+                        toggle.classList.toggle('is-active', toggle === button);
+                    });
+                });
+            });
+            var printButton = document.getElementById('booking-detail-print');
+            if (printButton) {
+                printButton.addEventListener('click', function () {
+                    formView.classList.remove('is-active');
+                    pdfView.classList.add('is-active');
+                    window.print();
+                });
+            }
+        })();
     </script>
     <script src="assets/app.js?v=<?php echo (int) (@filemtime(__DIR__ . '/assets/app.js') ?: time()); ?>"></script>
 </body>

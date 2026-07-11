@@ -247,7 +247,10 @@
                 matchLine = '<div class="lab-match">Matching asset: ' + matchedAssets.join(', ') + '</div>';
             }
             var maintenanceLine = '';
-            if (lab.maintenance_status === 'maintenance') {
+            var todayKey = new Date().toISOString().slice(0, 10);
+            var maintenanceHasEnded = lab.maintenance_end_date && lab.maintenance_end_date < todayKey;
+            var showMaintenance = lab.maintenance_status === 'maintenance' && !maintenanceHasEnded;
+            if (showMaintenance) {
                 var maintenanceLabel = '';
                 if (lab.maintenance_start_date && lab.maintenance_end_date) {
                     maintenanceLabel = formatDateKey(lab.maintenance_start_date) + ' to ' + formatDateKey(lab.maintenance_end_date);
@@ -263,7 +266,7 @@
                 '<div><span>Capacity:</span> ' + (lab.lab_capacity || '-') + '</div>',
                 '<div><span>Supervisor:</span> ' + escapeHtml(lab.supervisor_name || '-') + '</div>',
                 '</div>',
-                (lab.maintenance_status === 'maintenance' ? '<div class="cluster-match">Under maintenance</div>' : ''),
+                (showMaintenance ? '<div class="cluster-match">Under maintenance</div>' : ''),
                 maintenanceLine,
                 matchLine,
                 '<a class="btn primary" href="availability.php?lab_id=' + encodeURIComponent(lab.lab_id) + '">Select Lab</a>'
@@ -593,7 +596,7 @@
             });
         }
 
-        function selectDate(dateKey) {
+        function selectDate(dateKey, openBookedModal) {
             selectedDate = dateKey;
             bookingDateInput.value = dateKey;
             selectedSlots = [];
@@ -611,7 +614,7 @@
                 bookingSubmit.disabled = true;
             }
             closeBookedSlotsModal();
-            if (canViewCalendarHistory && !isMaintenance && bookedSlotDetailsByDateHasItems(dateKey)) {
+            if (openBookedModal && canViewCalendarHistory && !isMaintenance && bookedSlotDetailsByDateHasItems(dateKey)) {
                 openBookedSlotsModal(dateKey, bookedDetailsByDate[dateKey] || [], true);
             }
             if (bookingHint) {
@@ -645,7 +648,7 @@
 
             cell.innerHTML = [
                 '<div class="calendar-day">' + day + '</div>',
-                '<div class="calendar-meta">' + (cellIsMaintenance ? 'Maintenance' : (bookingCount + ' bookings')) + '</div>'
+                '<div class="calendar-meta">' + (cellIsMaintenance ? 'Maintenance' : ('<span class="calendar-count">' + bookingCount + '</span><span class="calendar-count-label"> bookings</span>')) + '</div>'
             ].join('');
 
             var cellIsPast = cellDate < today;
@@ -684,7 +687,7 @@
                     var cells = calendarGrid.querySelectorAll('.calendar-cell');
                     cells.forEach(function (item) { item.classList.remove('selected'); });
                     this.classList.add('selected');
-                    selectDate(selectedKey);
+                    selectDate(selectedKey, true);
                 });
             })(cell, cellIsPast, cellIsLeadRestricted, cellIsMaintenance);
 
@@ -707,7 +710,7 @@
             var defaultCell = calendarGrid.querySelector('[data-date="' + selectedDate + '"]');
             if (defaultCell && !defaultCell.classList.contains('disabled')) {
                 defaultCell.classList.add('selected');
-                selectDate(selectedDate);
+                selectDate(selectedDate, false);
             }
         }
 

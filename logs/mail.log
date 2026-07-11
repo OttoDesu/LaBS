@@ -25,3 +25,25 @@
 [2026-06-14 21:41:23] PHPMailer sent: LaBS Password Reset Code -> ci230027@student.uthm.edu.my
 [2026-06-14 21:45:36] PHPMailer sent: Booking rejected -> mim.haura@gmail.com
 [2026-06-14 21:45:42] PHPMailer sent: Booking rejected in your cluster -> ksgt@uthm.edu.my
+[2026-07-08 19:46:55] PHPMailer sent: Lab booking submitted -> ci230027@student.uthm.edu.my
+[2026-07-08 19:47:00] PHPMailer sent: New lab booking for your lab -> mim.haura@gmail.com
+[2026-07-08 19:47:05] PHPMailer sent: New lab booking for your lab -> amelia.chong@example.com
+[2026-07-08 19:47:09] PHPMailer sent: New lab booking for your lab -> ksgt@uthm.edu.my
+[2026-07-08 19:47:13] PHPMailer sent: New lab booking for your lab -> liyana.mokhtar@example.com
+[2026-07-09 05:11:28] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-07-09 05:11:43] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-07-09 05:11:43] Email skipped: placeholder recipient [amelia.chong@example.com]
+[2026-07-09 05:11:58] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-07-09 05:11:58] Email skipped: placeholder recipient [liyana.mokhtar@example.com]
+[2026-07-09 05:18:01] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-07-09 05:18:01] Email skipped: placeholder recipient [amelia.chong@example.com]
+[2026-07-09 05:18:16] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-07-09 05:18:16] Email skipped: placeholder recipient [liyana.mokhtar@example.com]
+[2026-07-09 05:34:06] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-07-09 05:34:06] Email skipped: placeholder recipient [amelia.chong@example.com]
+[2026-07-09 05:34:21] PHPMailer failed: SMTP Error: Could not connect to SMTP host. Failed to connect to server
+[2026-07-09 05:34:21] Email skipped: placeholder recipient [liyana.mokhtar@example.com]
+[2026-07-09 05:34:54] PHPMailer sent: Group booking updated -> mim.haura@gmail.com
+[2026-07-09 05:34:54] Email skipped: placeholder recipient [amelia.chong@example.com]
+[2026-07-09 05:34:58] PHPMailer sent: Group booking updated for your lab -> ksgt@uthm.edu.my
+[2026-07-09 05:34:58] Email skipped: placeholder recipient [liyana.mokhtar@example.com]
